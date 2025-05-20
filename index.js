@@ -1,6 +1,6 @@
 require('dotenv').config();
 const { Client, GatewayIntentBits } = require('discord.js');
-const axios = require('axios');
+const { OpenAI } = require('openai');
 
 const client = new Client({
     intents: [
@@ -10,33 +10,74 @@ const client = new Client({
     ]
 });
 
+const openai = new OpenAI({
+    apiKey: process.env.SHAPES_API_KEY,
+    baseURL: "https://api.shapes.inc/v1"
+});
+
+// Function to split message while preserving code blocks
+function splitMessage(text) {
+    const MAX_LENGTH = 1900;
+    const messages = [];
+    let currentMessage = '';
+    let inCodeBlock = false;
+    
+    const lines = text.split('\n');
+    
+    for (const line of lines) {
+        if (line.includes('```')) {
+            inCodeBlock = !inCodeBlock;
+        }
+        
+        if (currentMessage.length + line.length + 1 > MAX_LENGTH) {
+            if (inCodeBlock) {
+                currentMessage += '```';
+                messages.push(currentMessage);
+                currentMessage = '```' + line + '\n';
+            } else {
+                messages.push(currentMessage);
+                currentMessage = line + '\n';
+            }
+        } else {
+            currentMessage += line + '\n';
+        }
+    }
+    
+    if (currentMessage) {
+        messages.push(currentMessage);
+    }
+    
+    return messages.map(msg => msg.trim());
+}
+
 client.once('ready', () => {
     console.log('Bot is ready!');
 });
 
 client.on('messageCreate', async message => {
-    // Ignore messages from bots to prevent loops
     if (message.author.bot) return;
 
     try {
-        // Show typing indicator while processing
-        message.channel.sendTyping();
-
-        const response = await axios.post('https://api.shapes.ai/v1/chat/completions', {
-            messages: [{ role: 'user', content: message.content }]
-        }, {
-            headers: {
-                'Authorization': `Bearer ${process.env.SHAPES_API_KEY}`,
-                'Content-Type': 'application/json'
-            }
+        const response = await openai.chat.completions.create({
+            model: "shapesinc/aura-zwl3",
+            messages: [{ 
+                role: "user", 
+                content: message.content 
+            }]
         });
 
-        const answer = response.data.choices[0].message.content;
-        await message.reply(answer);
-
+        if (response.choices?.[0]?.message?.content) {
+            const chunks = splitMessage(response.choices[0].message.content);
+            
+            for (const chunk of chunks) {
+                if (chunk.trim()) {
+                    await message.channel.send(chunk);
+                }
+            }
+        }
     } catch (error) {
-        console.error('Error:', error.response?.data || error.message);
-        await message.reply('Sorry, I encountered an error while processing your message. Please try again later.');
+        // Silent error handling
+        console.error('API Error:', error);
     }
 });
 
