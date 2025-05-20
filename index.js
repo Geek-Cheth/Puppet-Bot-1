@@ -1,51 +1,42 @@
 require('dotenv').config();
-const fs = require('node:fs');
-const path = require('node:path');
-const { Client, Collection, Events, GatewayIntentBits } = require('discord.js');
+const { Client, GatewayIntentBits } = require('discord.js');
+const axios = require('axios');
 
-const client = new Client({ 
+const client = new Client({
     intents: [
         GatewayIntentBits.Guilds,
         GatewayIntentBits.GuildMessages,
         GatewayIntentBits.MessageContent
-    ] 
+    ]
 });
-client.commands = new Collection();
 
-const commandsPath = path.join(__dirname, 'commands');
-const commandFiles = fs.readdirSync(commandsPath).filter(file => file.endsWith('.js'));
-
-for (const file of commandFiles) {
-    const filePath = path.join(commandsPath, file);
-    const command = require(filePath);
-    
-    if ('data' in command && 'execute' in command) {
-        client.commands.set(command.data.name, command);
-    } else {
-        console.log(`[WARNING] The command at ${filePath} is missing a required "data" or "execute" property.`);
-    }
-}
-
-client.once(Events.ClientReady, () => {
+client.once('ready', () => {
     console.log('Bot is ready!');
 });
 
-client.on(Events.InteractionCreate, async interaction => {
-    if (!interaction.isChatInputCommand()) return;
-
-    const command = client.commands.get(interaction.commandName);
-
-    if (!command) return;
+client.on('messageCreate', async message => {
+    // Ignore messages from bots to prevent loops
+    if (message.author.bot) return;
 
     try {
-        await command.execute(interaction);
+        // Show typing indicator while processing
+        message.channel.sendTyping();
+
+        const response = await axios.post('https://api.shapes.ai/v1/chat/completions', {
+            messages: [{ role: 'user', content: message.content }]
+        }, {
+            headers: {
+                'Authorization': `Bearer ${process.env.SHAPES_API_KEY}`,
+                'Content-Type': 'application/json'
+            }
+        });
+
+        const answer = response.data.choices[0].message.content;
+        await message.reply(answer);
+
     } catch (error) {
-        console.error(error);
-        if (interaction.replied || interaction.deferred) {
-            await interaction.followUp({ content: 'There was an error while executing this command!', ephemeral: true });
-        } else {
-            await interaction.reply({ content: 'There was an error while executing this command!', ephemeral: true });
-        }
+        console.error('Error:', error.response?.data || error.message);
+        await message.reply('Sorry, I encountered an error while processing your message. Please try again later.');
     }
 });
 
