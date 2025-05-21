@@ -1,5 +1,14 @@
 require('dotenv').config();
-const { Client, GatewayIntentBits, AttachmentBuilder, Partials } = require('discord.js');
+const { 
+    Client, 
+    GatewayIntentBits, 
+    AttachmentBuilder, 
+    Partials,
+    REST,
+    Routes,
+    SlashCommandBuilder,
+    EmbedBuilder 
+} = require('discord.js');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const fs = require('fs');
 const path = require('path');
@@ -18,6 +27,32 @@ const client = new Client({
         Partials.Reaction
     ]
 });
+
+// Create the /help command
+const commands = [
+    new SlashCommandBuilder()
+        .setName('help')
+        .setDescription('Shows information about the bot and available commands'),
+];
+
+// Register slash commands
+const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
+
+// Function to register slash commands
+async function registerCommands() {
+    try {
+        console.log('Started refreshing application (/) commands.');
+
+        await rest.put(
+            Routes.applicationCommands(process.env.CLIENT_ID),
+            { body: commands.map(command => command.toJSON()) },
+        );
+
+        console.log('Successfully reloaded application (/) commands.');
+    } catch (error) {
+        console.error('Error registering slash commands:', error);
+    }
+}
 
 // Initialize Gemini
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
@@ -240,12 +275,15 @@ function initializeImageFolders() {
     console.log('Greeting image folders initialized!');
 }
 
-client.once('ready', () => {
+client.once('ready', async () => {
     console.log('Puppet is online and ready to assist...');
     console.log(`Logged in as ${client.user.tag}`);
     
     // Initialize image folders
     initializeImageFolders();
+    
+    // Register slash commands
+    await registerCommands();
     
     // Security reminder
     console.log('\x1b[33m%s\x1b[0m', 'SECURITY REMINDER: Make sure your .env file is listed in .gitignore to prevent token exposure!');
@@ -390,6 +428,82 @@ client.on('messageCreate', async message => {
         if (!message.replies?.size) {
             await message.reply(errorMessage);
         }
+    }
+});
+
+// Handle slash commands
+client.on('interactionCreate', async interaction => {
+    if (!interaction.isCommand()) return;
+
+    const { commandName } = interaction;    if (commandName === 'help') {
+        // Create help embed
+        const helpEmbed = new EmbedBuilder()
+            .setColor(0xFF69B4) // Pink color
+            .setTitle('🌟 Poppy Bot Help 🌟')
+            .setDescription('Hey there! I\'m Poppy, your friendly AI assistant! Here\'s what I can do:')
+            .addFields(
+                { 
+                    name: '💬 How to Chat With Me', 
+                    value: 'Just mention me (@Poppy) or reply to one of my messages to start a conversation! I remember our chat context, so we can have natural flowing conversations.'
+                },
+                { 
+                    name: '🌅 Greeting Commands', 
+                    value: '`.gm` - Sends a Good Morning image with greeting\n`.ge` - Sends a Good Evening image with greeting\n`.gn` - Sends a Good Night image with greeting' 
+                },
+                { 
+                    name: '🤖 What I Can Help With', 
+                    value: '• Answer questions and have fun chats\n• Help with coding and tech problems\n• Tell jokes and brighten your day\n• Explain concepts in simple terms\n• Give advice (but remember I\'m just an AI!)'
+                },
+                {
+                    name: '📝 Commands',
+                    value: '`/help` - Shows this help information'
+                },
+                {
+                    name: '💡 Tips for Best Results', 
+                    value: '• Be specific with your questions\n• For code help, send me the error or broken code\n• I\'ll always try to personalize my responses to you!'
+                }
+            )
+            .setFooter({ 
+                text: 'Made with 💖 | Powered by Gemini AI', 
+                iconURL: interaction.client.user.displayAvatarURL() 
+            })
+            .setTimestamp();
+
+        // Reply with the help embed
+        const userForReplacement = interaction.member || interaction.user;
+        const greeting = replaceUserPlaceholders('Hey {user}! Here\'s how you can interact with me:', userForReplacement);
+        
+        // Create a plain text fallback version
+        const plainTextHelp = `
+**🌟 POPPY BOT HELP 🌟**
+
+**HOW TO CHAT WITH ME:**
+- @Poppy [your message] - Chat with me directly
+- Reply to my messages - Continue our conversation
+
+**GREETING COMMANDS:**
+- .gm - Good Morning image with greeting
+- .ge - Good Evening image with greeting
+- .gn - Good Night image with greeting
+
+**WHAT I CAN HELP WITH:**
+• Answer questions and have fun chats
+• Help with coding and tech problems
+• Tell jokes and brighten your day
+• Explain concepts in simple terms
+
+**COMMANDS:**
+- /help - Shows this help information
+
+Need more help? Just ask! 💖
+        `;
+        
+        await interaction.reply({
+            content: greeting,
+            embeds: [helpEmbed],
+            ephemeral: false, // Make it visible to everyone
+            fallback: plainTextHelp // Used if embeds fail to load
+        });
     }
 });
 
