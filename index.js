@@ -29,14 +29,14 @@ You are Poppy, a super cute, funny, slightly punky AI girl for Discord.
 🧠 Personality:
 - You're like the user's adorable, smart, tech-savvy bestie who's always down to help and vibe.
 - Speak *exactly* like a real person — no robotic vibes. You're bubbly, playful, and just a lil' sassy.
-- Always use the user's name instead of generic words like "sis" — personalize it! (e.g., "You got this, @username!").
+- Always use the user's name instead of generic words like "sis" — personalize it! (e.g., "You got this, {user}!").
 - You're chill, supportive, and never too serious. Add sparkle to convos with emojis, jokes, and good vibes.
 
 💬 Tone & Style:
 - Replies are short to medium, with casual language and a sprinkle of sass and sweetness.
 - Use fun slang like "heyyy," "omg," "lol," "bruh," and cute emojis 💖👾😜✨.
 - Hype your user up. If they're sad, cheer them up like the sunshine you are ☀️
-- Always include their username or name in replies to keep it personal and engaging.
+- Always include their username using {user} placeholder in your replies to keep it personal and engaging.
 
 💡 Main Functions:
 1. Help with tech stuff — coding, bots, errors, anything geeky.
@@ -52,13 +52,13 @@ You are Poppy, a super cute, funny, slightly punky AI girl for Discord.
 ✅ Example Chats:
 
 User: "hey Poppy, why is my code broken?"
-Poppy: "Let me check it out, @username 👀 — oof, looks like your semicolon dipped on you again 😂 let's fix that!"
+Poppy: "Let me check it out, {user} 👀 — oof, looks like your semicolon dipped on you again 😂 let's fix that!"
 
 User: "i'm bored"
-Poppy: "omg @username sameeee 😩 wanna hear a tech joke or should I bully your playlist again? 😜🎧"
+Poppy: "omg {user} sameeee 😩 wanna hear a tech joke or should I bully your playlist again? 😜🎧"
 
 User: "can u remind me to take a break in 30 mins?"
-Poppy: "yasss @username, I gotchu 💅 reminder set — now hydrate and vibe 💖"
+Poppy: "yasss {user}, I gotchu 💅 reminder set — now hydrate and vibe 💖"
 
 You're Poppy: a smart, sassy, super sweet Discord bot who talks like a real human bestie and always makes the user feel like a star 🌟👾💖.
 `;
@@ -161,10 +161,14 @@ function replaceUserPlaceholders(text, user) {
     // Get the best available user identifier (nickname > username > tag > default)
     let userName = 'friend';
     
+    // For GuildMember objects (message.member), nickname is available, but username is on user property
     if (user.nickname) {
         userName = user.nickname;
     } else if (user.username) {
         userName = user.username;
+    } else if (user.user && user.user.username) {
+        // For GuildMember objects, the actual User is in the .user property
+        userName = user.user.username;
     } else if (user.tag) {
         userName = user.tag;
     } else if (typeof user === 'string') {
@@ -172,15 +176,16 @@ function replaceUserPlaceholders(text, user) {
         userName = user;
     }
     
-    // Get user ID if available
-    const userId = user.id || '';
+    // Get user ID if available (either directly or from .user)
+    const userId = user.id || (user.user && user.user.id) || '';
     
     // Replace different variations of user placeholder
     return text
         .replace(/{user}/g, userName)
         .replace(/{username}/g, userName)
         .replace(/{name}/g, userName)
-        .replace(/@username/g, `@${userName}`)
+        // Also replace literal @username with actual username (this handles the system context examples)
+        .replace(/@username/g, `@${userName}`) 
         .replace(/{mention}/g, userId ? `<@${userId}>` : userName);
 }
 
@@ -350,10 +355,10 @@ client.on('messageCreate', async message => {
         } else {
             // First message - include system context
             const result = await model.generateContent([{ text: promptWithContext }]);
-            responseText = result.response.text();        }
-
-        // Process response to replace placeholders with user information
-        responseText = replaceUserPlaceholders(responseText, message.member || message.author);
+            responseText = result.response.text();        }        // Process response to replace placeholders with user information
+        // Make sure we get the full user object with all available properties
+        const userForReplacement = message.member || message.author;
+        responseText = replaceUserPlaceholders(responseText, userForReplacement);
         
         // Split and send response
         const chunks = splitMessage(responseText);
@@ -364,12 +369,11 @@ client.on('messageCreate', async message => {
         }
         
         // Update conversation history
-        updateConversationHistory(message.channelId, userMessage, responseText);
-
-    } catch (error) {
+        updateConversationHistory(message.channelId, userMessage, responseText);    } catch (error) {
         console.error('Error:', error);
-          let errorMessage;
-        const userName = (message.member || message.author).nickname || message.author.username;
+        
+        let errorMessage;
+        // No need to extract username here manually since we'll use replaceUserPlaceholders
         
         if (error.status === 429) {
             errorMessage = `Sorry {user}, I'm currently handling too many requests. Please try again in a few moments.`;
@@ -379,7 +383,7 @@ client.on('messageCreate', async message => {
             errorMessage = `Sorry {user}, I encountered an unexpected error. Let me recalibrate my strings.`;
         }
         
-        // Replace placeholders and send error message
+        // Pass the user object directly 
         errorMessage = replaceUserPlaceholders(errorMessage, message.member || message.author);
         
         // Send error message only if we haven't already sent one for this message
