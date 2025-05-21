@@ -47,6 +47,26 @@ CREATE TABLE IF NOT EXISTS guild_settings (
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
+-- Status Messages table - store messages for the bot's status
+CREATE TABLE IF NOT EXISTS status_messages (
+    id SERIAL PRIMARY KEY,
+    message TEXT NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Insert status messages
+INSERT INTO status_messages (message) VALUES
+('👀 Watching you struggle with semicolons again... lol'),
+('💅 Smarter than your code, cuter than your crush'),
+('👾 I debug harder than you cry'),
+('💖 Be nice or I’ll roast your entire GitHub'),
+('☕ Powered by bugs, chaos & ✨vibes✨'),
+('📟 404: Your chill? Not found.'),
+('🧠 Cute face, deadly logic'),
+('🎧 Coding with attitude & a killer playlist'),
+('🫶 Brb, breaking the internet (cutely)'),
+('💬 I don’t make errors. I make *features*');
+
 -- Create indexes for better performance
 CREATE INDEX IF NOT EXISTS idx_users_discord_id ON users(discord_id);
 CREATE INDEX IF NOT EXISTS idx_conversations_user_id ON conversations(user_id);
@@ -61,6 +81,7 @@ ALTER TABLE users ENABLE ROW LEVEL SECURITY;
 ALTER TABLE conversations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE custom_commands ENABLE ROW LEVEL SECURITY;
 ALTER TABLE guild_settings ENABLE ROW LEVEL SECURITY;
+ALTER TABLE status_messages ENABLE ROW LEVEL SECURITY;
 
 -- Create policy that only allows the service role to access all tables
 -- This ensures only the bot can access the database through the service role key
@@ -68,6 +89,7 @@ CREATE POLICY service_role_all ON users TO authenticated USING (true);
 CREATE POLICY service_role_all ON conversations TO authenticated USING (true);
 CREATE POLICY service_role_all ON custom_commands TO authenticated USING (true);
 CREATE POLICY service_role_all ON guild_settings TO authenticated USING (true);
+CREATE POLICY service_role_all ON status_messages TO authenticated USING (true);
 
 -- Sample data for testing (uncomment to use)
 /*

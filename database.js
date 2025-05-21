@@ -491,6 +491,25 @@ async function getUserStats(discordId) {
     };
 }
 
+// Function to get a random status message
+async function getRandomStatusMessage() {
+    const { data, error } = await supabase
+        .from('status_messages')
+        .select('message');
+
+    if (error) {
+        console.error('Error fetching status messages:', error);
+        return null;
+    }
+
+    if (data && data.length > 0) {
+        const randomIndex = Math.floor(Math.random() * data.length);
+        return data[randomIndex];
+    }
+
+    return null; // No messages found
+}
+
 module.exports = {
     getUser,
     createOrUpdateUser,
@@ -503,5 +522,6 @@ module.exports = {
     deleteCustomCommand,
     getGuildSettings,
     updateGuildSetting,
-    getUserStats
+    getUserStats,
+    getRandomStatusMessage
 };

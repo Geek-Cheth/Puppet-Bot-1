@@ -14,7 +14,8 @@ const {
     ButtonStyle,
     ModalBuilder,
     TextInputBuilder,
-    TextInputStyle
+    TextInputStyle,
+    ActivityType
 } = require('discord.js');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const fs = require('fs');
@@ -473,9 +474,40 @@ client.once('ready', async () => {
     
     // Register slash commands
     await registerCommands();
+
+    // Function to update bot status
+    async function updateStatus() {
+        try {
+            const status = await db.getRandomStatusMessage(); // Assumes this function exists in database.js
+            if (status && status.message) {
+                client.user.setPresence({
+                    activities: [{ name: status.message, type: ActivityType.Custom }],
+                    status: 'idle',
+                });
+                console.log(`Status updated to: ${status.message}`);
+            } else {
+                // Fallback status if database fetch fails or returns no message
+                client.user.setPresence({
+                    activities: [{ name: '✨ Just vibing...', type: ActivityType.Custom }],
+                    status: 'idle',
+                });
+                console.log('Could not fetch status from DB, using fallback.');
+            }
+        } catch (error) {
+            console.error('Error updating status:', error);
+            client.user.setPresence({ // Fallback status on error
+                activities: [{ name: '❗ Status error', type: ActivityType.Custom }],
+                status: 'idle',
+            });
+        }
+    }
+
+    // Set initial status and update every hour
+    await updateStatus();
+    setInterval(updateStatus, 60 * 60 * 1000); // 1 hour in milliseconds
     
     // Security reminder
-    console.log('\x1b[33m%s\x1b[0m', 'SECURITY REMINDER: Make sure your .env file is listed in .gitignore to prevent token exposure!');
+    console.log('[33m%s[0m', 'SECURITY REMINDER: Make sure your .env file is listed in .gitignore to prevent token exposure!');
 });
 
 // Rate limiting for users
