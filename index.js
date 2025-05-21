@@ -24,7 +24,7 @@ const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
 // Context for the AI's personality and behavior
 const SYSTEM_CONTEXT = `
-You are Puppet, a super cute, funny, slightly punky AI girl for Discord.
+You are Poppy, a super cute, funny, slightly punky AI girl for Discord.
 
 🧠 Personality:
 - You're like the user's adorable, smart, tech-savvy bestie who's always down to help and vibe.
@@ -51,31 +51,31 @@ You are Puppet, a super cute, funny, slightly punky AI girl for Discord.
 
 ✅ Example Chats:
 
-User: "hey puppet, why is my code broken?"
-Puppet: "Let me check it out, @username 👀 — oof, looks like your semicolon dipped on you again 😂 let's fix that!"
+User: "hey Poppy, why is my code broken?"
+Poppy: "Let me check it out, @username 👀 — oof, looks like your semicolon dipped on you again 😂 let's fix that!"
 
 User: "i'm bored"
-Puppet: "omg @username sameeee 😩 wanna hear a tech joke or should I bully your playlist again? 😜🎧"
+Poppy: "omg @username sameeee 😩 wanna hear a tech joke or should I bully your playlist again? 😜🎧"
 
 User: "can u remind me to take a break in 30 mins?"
-Puppet: "yasss @username, I gotchu 💅 reminder set — now hydrate and vibe 💖"
+Poppy: "yasss @username, I gotchu 💅 reminder set — now hydrate and vibe 💖"
 
-You're Puppet: a smart, sassy, super sweet Discord bot who talks like a real human bestie and always makes the user feel like a star 🌟👾💖.
+You're Poppy: a smart, sassy, super sweet Discord bot who talks like a real human bestie and always makes the user feel like a star 🌟👾💖.
 `;
 
 // Configuration for greeting images
 const GREETING_COMMANDS = {
   '.gm': {
     folder: 'goodmorning',
-    message: '☀️ Good Morning! Rise and shine!'
+    message: '☀️ Good Morning, {user}! Rise and shine!'
   },
   '.ge': {
     folder: 'goodevening',
-    message: '🌆 Good Evening! Hope you had a great day!'
+    message: '🌆 Good Evening, {user}! Hope you had a great day!'
   },
   '.gn': {
     folder: 'goodnight',
-    message: '🌙 Good Night! Sweet dreams!'
+    message: '🌙 Good Night, {user}! Sweet dreams!'
   }
 };
 
@@ -151,6 +151,39 @@ function splitMessage(text) {
     return messages.map(msg => msg.trim());
 }
 
+// Function to replace placeholders with user information
+function replaceUserPlaceholders(text, user) {
+    if (!text) return text;
+    
+    // Handle case when user object may be incomplete
+    if (!user) return text;
+    
+    // Get the best available user identifier (nickname > username > tag > default)
+    let userName = 'friend';
+    
+    if (user.nickname) {
+        userName = user.nickname;
+    } else if (user.username) {
+        userName = user.username;
+    } else if (user.tag) {
+        userName = user.tag;
+    } else if (typeof user === 'string') {
+        // Handle case where a string was passed directly
+        userName = user;
+    }
+    
+    // Get user ID if available
+    const userId = user.id || '';
+    
+    // Replace different variations of user placeholder
+    return text
+        .replace(/{user}/g, userName)
+        .replace(/{username}/g, userName)
+        .replace(/{name}/g, userName)
+        .replace(/@username/g, `@${userName}`)
+        .replace(/{mention}/g, userId ? `<@${userId}>` : userName);
+}
+
 // Keep track of conversation history per channel
 const conversationHistory = new Map();
 
@@ -219,23 +252,28 @@ const COOLDOWN_DURATION = 3000; // 3 seconds between messages
 
 client.on('messageCreate', async message => {
     if (message.author.bot) return;
-    
-    // Check if the message is a greeting command
+      // Check if the message is a greeting command
     const messageContent = message.content.trim().toLowerCase();
     if (GREETING_COMMANDS[messageContent]) {
         const greetingConfig = GREETING_COMMANDS[messageContent];
         const imagePath = getRandomImage(greetingConfig.folder);
         
+        // Replace {user} placeholders with the user's name
+        const personalizedMessage = replaceUserPlaceholders(
+            greetingConfig.message, 
+            message.member || message.author
+        );
+        
         if (imagePath) {
             // Send the greeting image
             const attachment = new AttachmentBuilder(imagePath);
             await message.reply({ 
-                content: greetingConfig.message, 
+                content: personalizedMessage, 
                 files: [attachment] 
             });
         } else {
             // No images found, inform the user
-            await message.reply(`${greetingConfig.message} (No images found in the ${greetingConfig.folder} folder yet. Please add some images!)`);
+            await message.reply(`${personalizedMessage} (No images found in the ${greetingConfig.folder} folder yet. Please add some images!)`);
         }
         return;
     }
@@ -271,10 +309,13 @@ client.on('messageCreate', async message => {
     const now = Date.now();
     const cooldownKey = `${message.author.id}-${message.channelId}`;
     const cooldownEnd = userCooldowns.get(cooldownKey);
-    
-    if (cooldownEnd && now < cooldownEnd) {
+      if (cooldownEnd && now < cooldownEnd) {
         const remainingTime = Math.ceil((cooldownEnd - now) / 1000);
-        await message.reply(`Please wait ${remainingTime} second(s) before sending another message.`);
+        const cooldownMessage = replaceUserPlaceholders(
+            `Slow down {user}! Please wait ${remainingTime} second(s) before sending another message.`,
+            message.member || message.author
+        );
+        await message.reply(cooldownMessage);
         return;
     }
 
@@ -309,28 +350,37 @@ client.on('messageCreate', async message => {
         } else {
             // First message - include system context
             const result = await model.generateContent([{ text: promptWithContext }]);
-            responseText = result.response.text();
-        }// Split and send response
+            responseText = result.response.text();        }
+
+        // Process response to replace placeholders with user information
+        responseText = replaceUserPlaceholders(responseText, message.member || message.author);
+        
+        // Split and send response
         const chunks = splitMessage(responseText);
         for (const chunk of chunks) {
             if (chunk.trim()) {
                 await message.reply(chunk);
             }
         }
-          // Update conversation history
+        
+        // Update conversation history
         updateConversationHistory(message.channelId, userMessage, responseText);
 
     } catch (error) {
         console.error('Error:', error);
+          let errorMessage;
+        const userName = (message.member || message.author).nickname || message.author.username;
         
-        let errorMessage;
         if (error.status === 429) {
-            errorMessage = "I'm currently handling too many requests. Please try again in a few moments.";
+            errorMessage = `Sorry {user}, I'm currently handling too many requests. Please try again in a few moments.`;
         } else if (error.status === 404) {
-            errorMessage = "There was a configuration issue. Please contact the bot administrator.";
+            errorMessage = `Oops {user}, there was a configuration issue. Please contact the bot administrator.`;
         } else {
-            errorMessage = "I encountered an unexpected error. Let me recalibrate my strings.";
+            errorMessage = `Sorry {user}, I encountered an unexpected error. Let me recalibrate my strings.`;
         }
+        
+        // Replace placeholders and send error message
+        errorMessage = replaceUserPlaceholders(errorMessage, message.member || message.author);
         
         // Send error message only if we haven't already sent one for this message
         if (!message.replies?.size) {
