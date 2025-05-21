@@ -1,5 +1,5 @@
 require('dotenv').config();
-const { Client, GatewayIntentBits, AttachmentBuilder } = require('discord.js');
+const { Client, GatewayIntentBits, AttachmentBuilder, Partials } = require('discord.js');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const fs = require('fs');
 const path = require('path');
@@ -9,7 +9,13 @@ const client = new Client({
     intents: [
         GatewayIntentBits.Guilds,
         GatewayIntentBits.GuildMessages,
-        GatewayIntentBits.MessageContent
+        GatewayIntentBits.MessageContent,
+        GatewayIntentBits.GuildMessageReactions
+    ],
+    partials: [
+        Partials.Message,
+        Partials.Channel,
+        Partials.Reaction
     ]
 });
 
@@ -159,10 +165,17 @@ function updateConversationHistory(channelId, userMessage, aiResponse) {
     
     const history = conversationHistory.get(channelId);
     
-    // Add messages to conversation history
-    // Gemini requires the first message to be from the user
-    history.push({ role: "user", content: userMessage });
-    history.push({ role: "model", content: aiResponse });
+    // Add messages to conversation history with proper format for Gemini API
+    // Each message needs a role and parts property with content
+    history.push({ 
+        role: "user", 
+        parts: [{ text: userMessage }]
+    });
+    
+    history.push({ 
+        role: "model", 
+        parts: [{ text: aiResponse }]
+    });
     
     // Keep only last 10 messages (5 turns) for context
     // Make sure we always keep an even number of messages with user message first
@@ -230,24 +243,31 @@ client.on('messageCreate', async message => {
         return;
     }
     
-    // Check if the message is directed to the bot (mention or prefix)
+    // Check if the message is directed to the bot (mention or reply to bot's message)
     const botMention = `<@${client.user.id}>`;
-    const prefix = '!puppet'; // You can change this to your preferred prefix
-      // Only respond if the message starts with the prefix, mentions the bot first, or is in a DM
-    const isMentioned = message.content.startsWith(botMention);
-    const hasPrefix = message.content.toLowerCase().startsWith(prefix);
-    const isDM = !message.guild; // Modern way to check for DMs in Discord.js v14
-    if (!(isMentioned || hasPrefix || isDM)) return;
     
-    // Extract actual message content after prefix or mention
+    // Check if message mentions the bot
+    const isMentioned = message.content.startsWith(botMention);
+      // Check if message is a reply to the bot's message
+    let isReplyToBot = false;
+    if (message.reference && message.reference.messageId) {
+        try {
+            const repliedTo = await message.channel.messages.fetch(message.reference.messageId);
+            isReplyToBot = repliedTo.author.id === client.user.id;
+        } catch (err) {
+            console.error('Error checking reference message:', err);
+        }
+    }
+    
+    // Only respond if the bot is mentioned or if it's a reply to the bot's message
+    if (!(isMentioned || isReplyToBot)) return;
+      // Extract actual message content after mention if present
     let userMessage = message.content;
     if (isMentioned) {
         userMessage = message.content.slice(botMention.length).trim();
-    } else if (hasPrefix) {
-        userMessage = message.content.slice(prefix.length).trim();
     }
     
-    // If message is empty after removing prefix/mention, ignore it
+    // If message is empty after removing mention, ignore it
     if (!userMessage.trim()) return;
 
     // Check cooldown
@@ -276,8 +296,7 @@ client.on('messageCreate', async message => {
         
         // Variable to store response
         let responseText;
-        
-        // Check if this is the first message in the conversation
+          // Check if this is the first message in the conversation
         if (history.length > 0) {
             // We have history, so use normal chat with history
             const chat = model.startChat({
@@ -288,11 +307,11 @@ client.on('messageCreate', async message => {
             });
             
             // Generate response
-            const result = await chat.sendMessage(userMessage);
+            const result = await chat.sendMessage([{ text: userMessage }]);
             responseText = result.response.text();
         } else {
             // First message - include system context
-            const result = await model.generateContent(promptWithContext);
+            const result = await model.generateContent([{ text: promptWithContext }]);
             responseText = result.response.text();
         }// Split and send response
         const chunks = splitMessage(responseText);
