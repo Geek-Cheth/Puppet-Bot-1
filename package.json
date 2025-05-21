@@ -12,6 +12,7 @@
   "dependencies": {
     "@discordjs/rest": "^2.5.0",
     "@google/generative-ai": "^0.24.1",
+    "@supabase/supabase-js": "^2.49.7",
     "axios": "^1.9.0",
     "discord-api-types": "^0.38.8",
     "discord.js": "^14.11.0",
