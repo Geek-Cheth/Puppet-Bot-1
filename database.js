@@ -43,6 +43,14 @@ const supabase = createClient(
  * - settings: JSON
  * - created_at: Timestamp
  * - updated_at: Timestamp
+ * 
+ * Table: shortened_urls
+ *  - id: UUID (primary key)
+ *  - user_id: UUID (foreign key to users.id)
+ *  - original_url: TEXT
+ *  - short_code: TEXT (the unique path segment of the shortened URL, e.g., pEqXje)
+ *  - short_url: TEXT (full shortened URL, e.g., https://cleanuri.com/pEqXje)
+ *  - created_at: Timestamp
  */
 
 // User management functions
@@ -535,5 +543,133 @@ module.exports = {
     getGuildSettings,
     updateGuildSetting,
     getUserStats,
-    getRandomStatusMessage
+    getRandomStatusMessage,
+    saveShortenedUrl,
+    getUserShortenedUrls,
+    getScannedUrl,
+    saveScannedUrl,
+    updateScannedUrl
 };
+
+// --- Scanned URL Cache Functions ---
+
+/**
+ * Retrieves a cached scan result for a URL.
+ * @param {string} url The URL to look up.
+ * @returns {Promise<object|null>} The cached scan result or null if not found or error.
+ */
+async function getScannedUrl(url) {
+    const { data, error } = await supabase
+        .from('scanned_urls')
+        .select('*')
+        .eq('url', url)
+        .single();
+
+    if (error && error.code !== 'PGRST116') { // PGRST116 is "not found"
+        console.error('Error fetching scanned URL from DB:', error);
+        return null;
+    }
+    return data;
+}
+
+/**
+ * Saves a new URL scan result to the database.
+ * @param {string} url The scanned URL.
+ * @param {string} status The scan status ('safe', 'malicious', 'unknown', 'error').
+ * @param {string|null} analysisId The VirusTotal analysis ID.
+ * @param {object|null} rawResponse The raw response from VirusTotal.
+ * @returns {Promise<object|null>} The saved record or null on error.
+ */
+async function saveScannedUrl(url, status, analysisId, rawResponse) {
+    const { data, error } = await supabase
+        .from('scanned_urls')
+        .insert({
+            url: url,
+            status: status,
+            virustotal_analysis_id: analysisId,
+            raw_response: rawResponse,
+            last_scanned_at: new Date() // Ensure this is set on creation
+        })
+        .select()
+        .single();
+
+    if (error) {
+        console.error('Error saving scanned URL to DB:', error);
+        return null;
+    }
+    return data;
+}
+
+/**
+ * Updates an existing URL scan result in the database.
+ * @param {string} url The URL to update.
+ * @param {string} status The new scan status.
+ * @param {string|null} analysisId The new VirusTotal analysis ID.
+ * @param {object|null} rawResponse The new raw response from VirusTotal.
+ * @returns {Promise<object|null>} The updated record or null on error.
+ */
+async function updateScannedUrl(url, status, analysisId, rawResponse) {
+    const { data, error } = await supabase
+        .from('scanned_urls')
+        .update({
+            status: status,
+            virustotal_analysis_id: analysisId,
+            raw_response: rawResponse,
+            last_scanned_at: new Date() // Update scan time
+        })
+        .eq('url', url)
+        .select()
+        .single();
+
+    if (error) {
+        console.error('Error updating scanned URL in DB:', error);
+        return null;
+    }
+    return data;
+}
+
+// --- URL Shortener functions ---
+async function saveShortenedUrl(discordId, originalUrl, shortCode, shortUrl) {
+    const user = await getUser(discordId);
+    if (!user) {
+        console.error('User not found for saving shortened URL, Discord ID:', discordId);
+        // Optionally, you could create the user here if that's desired behavior
+        return null; 
+    }
+
+    const { data, error } = await supabase
+        .from('shortened_urls')
+        .insert({
+            user_id: user.id,
+            original_url: originalUrl,
+            short_code: shortCode,
+            short_url: shortUrl,
+            created_at: new Date()
+        })
+        .select()
+        .single();
+
+    if (error) {
+        console.error('Error saving shortened URL:', error);
+        return null;
+    }
+    return data;
+}
+
+async function getUserShortenedUrls(discordId, limit = 10, offset = 0) {
+    const user = await getUser(discordId);
+    if (!user) return [];
+
+    const { data, error } = await supabase
+        .from('shortened_urls')
+        .select('*')
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: false })
+        .range(offset, offset + limit - 1);
+
+    if (error) {
+        console.error('Error fetching user shortened URLs:', error);
+        return [];
+    }
+    return data;
+}

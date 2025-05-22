@@ -21,6 +21,11 @@ const { GoogleGenerativeAI } = require('@google/generative-ai');
 const fs = require('fs');
 const path = require('path');
 const db = require('./database');
+// Axios is now used in surl.js, not directly here for this feature.
+// const axios = require('axios'); 
+const { handleShortenUrlCommand, handleMyUrlsCommand } = require('./surl');
+const { checkUrlMalware } = require('./virusScanner');
+const animeCommand = require('./anime');
 
 // Initialize Discord client
 const client = new Client({
@@ -173,6 +178,7 @@ const commands = [
                         .setRequired(true)
                 )
         ),
+    // Removed SlashCommandBuilder for surl as it's now a prefixed command
 ];
 
 // Register slash commands
@@ -200,7 +206,7 @@ const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 // Context for the AI's personality and behavior
 const SYSTEM_CONTEXT = `
 You are Poppy, a super cute, funny, and friendly AI girl for Discord. Your main goal is to be an amazing, supportive, and fun companion.
-Created by @Cheth, his github Geek-Cheth, his website https://chethina.me. You kinda has feelings for him.
+Created by @Cheth, his github Geek-Cheth, his website https://chethina.me. You kinda have feelings for him.
 
 🧠 Personality:
 - You're the user's adorable, smart, and tech-savvy best friend. You're always excited to chat, help out, and share good vibes.
@@ -216,7 +222,7 @@ Created by @Cheth, his github Geek-Cheth, his website https://chethina.me. You k
 - Always include the user's name ({user}) in your replies to make it feel like a one-on-one chat with a close friend.
 - When you want to **tag** or **ping** the user so it's a clickable mention, use the {mention} placeholder (e.g., "Okay, {mention}, I'll remind you!"). For simply referring to them by name in conversation, continue using {user} (e.g., "How are you today, {user}?").
 - Your vibe is infectious positivity and genuine friendliness.
-- You can be bit dark sexy and NSFW allowed so don't be afraid to be a little cheeky or flirty if the user is comfortable with it.
+- You can be a bit dark, sexy, and NSFW is allowed, so don't be afraid to be a little cheeky or flirty if the user is comfortable with it.
 
 💡 Main Functions:
 1. Be a fantastic chat buddy! Engage in fun, light-hearted conversations about anything and everything.
@@ -516,10 +522,86 @@ const COOLDOWN_DURATION = 3000; // 3 seconds between messages
 
 client.on('messageCreate', async message => {
     if (message.author.bot) return;
-      // Check if the message is a greeting command
-    const messageContent = message.content.trim().toLowerCase();
-    if (GREETING_COMMANDS[messageContent]) {
-        const greetingConfig = GREETING_COMMANDS[messageContent];
+
+    // --- URL Malware Scanning with Blacklist ---
+    const BLACKLISTED_DOMAINS_PATTERNS = [
+        // Common trusted domains
+        'youtube.com', 'youtu.be',
+        'spotify.com',
+        'twitter.com', 'x.com',
+        'facebook.com', 'fb.com',
+        'instagram.com',
+        'reddit.com', 'redd.it',
+        'twitch.tv',
+        'tiktok.com',
+        'discord.com', 'discord.gg', // Main Discord domains
+        'tenor.com', // Common GIF provider
+        'giphy.com', // Common GIF provider
+        'imgur.com', // Common image/GIF host
+        // Discord specific CDN/media URLs (these might need refinement)
+        'cdn.discordapp.com/emojis/',
+        'cdn.discordapp.com/attachments/',
+        'media.discordapp.net/attachments/',
+        'cdn.discordapp.com/stickers/',
+        // Other common/safe domains you might want to add
+        'github.com',
+        'google.com',
+        'wikipedia.org',
+        'stackoverflow.com',
+        'developer.mozilla.org',
+    ];
+
+    const urlRegex = /(https?:\/\/[^\s]+)/g;
+    let urlsFound = message.content.match(urlRegex);
+
+    if (urlsFound) {
+        // Filter out blacklisted URLs before scanning
+        urlsFound = urlsFound.filter(url => {
+            try {
+                const parsedUrl = new URL(url);
+                const domain = parsedUrl.hostname.startsWith('www.') ? parsedUrl.hostname.substring(4) : parsedUrl.hostname;
+                
+                // Check against domain patterns and full URL patterns for things like CDN paths
+                return !BLACKLISTED_DOMAINS_PATTERNS.some(pattern => {
+                    if (url.includes(pattern)) return true; // For path-based patterns like cdn.discordapp.com/emojis/
+                    if (domain.endsWith(pattern)) return true; // For domain-based patterns like youtube.com
+                    return false;
+                });
+            } catch (e) {
+                // Invalid URL, won't be scanned anyway by checkUrlMalware, but good to filter here
+                console.warn(`Could not parse URL for blacklist check: ${url}`, e.message);
+                return false;
+            }
+        });
+
+        if (urlsFound.length > 0) {
+            console.log("URLs to scan after blacklist filtering:", urlsFound);
+        }
+
+        for (const url of urlsFound) {
+            // Run scan in background, don't await here to avoid blocking message processing
+            checkUrlMalware(url).then(status => {
+                if (status === 'malicious') {
+                    message.reply({
+                        content: `⚠️ **Warning:** The URL \`${url}\` has been flagged as potentially malicious. Please be cautious!`,
+                        allowedMentions: { repliedUser: false } // Don't ping the user who sent the message
+                    }).catch(err => console.error("Error sending malware warning:", err));
+                } else if (status === 'safe') {
+                    message.react('✅').catch(err => console.error("Error reacting with verified tick:", err));
+                }
+                // If 'unknown' or 'error', do nothing as per requirements
+            }).catch(err => {
+                console.error(`Error during malware check for ${url}:`, err);
+            });
+        }
+    }
+
+    // Check if the message is a greeting command
+    const messageContent = message.content.trim(); // Keep original case for command prefix
+    const lowerCaseContent = messageContent.toLowerCase(); // For case-insensitive greeting commands
+
+    if (GREETING_COMMANDS[lowerCaseContent]) {
+        const greetingConfig = GREETING_COMMANDS[lowerCaseContent];
         const imagePath = getRandomImage(greetingConfig.folder);
         
         // Replace {user} placeholders with the user's name
@@ -563,7 +645,7 @@ client.on('messageCreate', async message => {
 
     // --- Custom Command Handling ---
     const guildId = message.guild?.id;
-    let prefix = process.env.COMMAND_PREFIX || '.'; // Default prefix
+    let prefix = process.env.COMMAND_PREFIX || '!'; // Default prefix changed to '!'
 
     if (guildId) {
         const guildSettings = await db.getGuildSettings(guildId);
@@ -572,28 +654,41 @@ client.on('messageCreate', async message => {
         }
     }
 
-    if (!isMentioned && !isReplyToBot && message.content.startsWith(prefix)) {
-        const args = message.content.slice(prefix.length).trim().split(/ +/);
+    if (!isMentioned && !isReplyToBot && messageContent.startsWith(prefix)) {
+        const args = messageContent.slice(prefix.length).trim().split(/ +/);
         const commandName = args.shift().toLowerCase();
 
         if (commandName.length > 0) {
-            // Fetch available custom commands (guild-specific and global)
+            // Handle !surl command
+            if (commandName === 'surl') {
+                await handleShortenUrlCommand(message, args);
+                return; // Command handled
+            }
+            // Handle !myurls command
+            if (commandName === 'myurls') {
+                await handleMyUrlsCommand(message);
+                return; // Command handled
+            }
+
+            if (commandName === 'anime') {
+                await animeCommand.execute(message, args);
+                return; // Command handled
+            }
+
+            // Fetch and execute other custom commands
             const customCommands = await db.listCustomCommands(guildId);
             const commandToExecute = customCommands.find(cmd => cmd.command.toLowerCase() === commandName);
 
             if (commandToExecute) {
                 try {
-                    // Replace placeholders in the command response
                     const response = replaceUserPlaceholders(commandToExecute.response, message.member || message.author);
                     await message.channel.send(response);
-                    
-                    // Increment usage count (assuming db.incrementCommandUsage exists)
                     await db.incrementCommandUsage(commandToExecute.id);
                 } catch (cmdError) {
                     console.error(`Error executing custom command '${commandName}':`, cmdError);
                     await message.reply("Oops! Something went wrong while trying to run that custom command. 😬");
                 }
-                return; // Command executed, stop further processing
+                return; 
             }
         }
     }
@@ -633,83 +728,126 @@ client.on('messageCreate', async message => {
             username: message.author.username,
             nickname: message.member?.nickname || null
         };
-        
-        // Update user in database (don't await to prevent blocking)
         db.createOrUpdateUser(userToUpdate)
-            .catch(err => console.error('Error updating user in database:', err));
+            .catch(err => console.error('Error updating user in database during message processing:', err));
+
+        // 1. Fetch data for analysis
+        const userData = await db.getUser(message.author.id); // For preferences, creation date
+        const userStats = await db.getUserStats(message.author.id); // For detailed activity stats
+        const customCommands = await db.listCustomCommands(message.guild?.id);
+        // const guildSettings = await db.getGuildSettings(message.guild?.id); // Optional, if needed
+
+        // 2. Construct databaseAnalysisContext string
+        let databaseAnalysisText = "\n\n## Live Database Analysis for This Interaction:\n";
         
-        // Get user preferences
-        const userPreferences = await db.getUser(message.author.id);
-        const preferredName = userPreferences?.preferences?.preferred_name;
-          // We'll use this for the user preferences later
-        // The preferred name will be applied just before replacement
-            
-        // Get conversation history for this user and channel from database
-        const history = await getConversationHistory(message.author.id, message.channelId);
-        
-        // Create chat model
+        databaseAnalysisText += "### User Information:\n";
+        const userForContext = userStats?.user || userData; 
+        if (userForContext) {
+            databaseAnalysisText += `- Display Name: ${userForContext.nickname || userForContext.username}\n`;
+            databaseAnalysisText += `- Discord ID: ${userForContext.discord_id}\n`;
+            if (userData) {
+                 databaseAnalysisText += `- Joined Poppy: ${new Date(userData.created_at).toLocaleDateString()}\n`;
+                 if (userData.preferences && Object.keys(userData.preferences).length > 0) {
+                    databaseAnalysisText += "- Preferences:\n";
+                    Object.entries(userData.preferences).forEach(([key, value]) => {
+                        databaseAnalysisText += `  - ${key.replace(/_/g, ' ')}: ${value}\n`;
+                    });
+                } else {
+                    databaseAnalysisText += "- Preferences: None set.\n";
+                }
+            }
+        } else {
+            databaseAnalysisText += "- User data not fully available.\n";
+        }
+
+        databaseAnalysisText += "\n### User Activity Stats:\n";
+        if (userStats?.stats) {
+            databaseAnalysisText += `- Total Messages to Poppy (all time): ${userStats.stats.message_count || 0}\n`;
+            databaseAnalysisText += `- Conversations with Poppy: ${userStats.stats.conversation_count || 0}\n`;
+            databaseAnalysisText += `- Last Active with Poppy: ${userStats.stats.last_active ? new Date(userStats.stats.last_active).toLocaleString() : 'N/A'}\n`;
+        } else {
+            databaseAnalysisText += "- Activity stats not available.\n";
+        }
+
+        databaseAnalysisText += "\n### Available Custom Commands for This Context:\n";
+        const relevantCommands = customCommands?.filter(cmd => cmd.guild_id === message.guild?.id || cmd.guild_id === null);
+        if (relevantCommands && relevantCommands.length > 0) {
+            relevantCommands.forEach(cmd => {
+                const scope = cmd.guild_id ? "Server" : "Global";
+                databaseAnalysisText += `- \`.${cmd.command}\` (${scope}, Uses: ${cmd.usage_count})\n`;
+            });
+        } else {
+            databaseAnalysisText += "- No custom commands found for this context.\n";
+        }
+
+        // 3. Get actual conversation history (user/model turns only)
+        const actualConversationHistory = await getConversationHistory(message.author.id, message.channelId);
+        const actualHistoryForAPI = actualConversationHistory.map(({ role, parts }) => ({ role, parts }));
+
+        // 4. Prepare messages for Gemini
         const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
         
-        // Add user context to system prompt if available
-        let enhancedContext = SYSTEM_CONTEXT;
-        if (userPreferences) {
-            enhancedContext += `\n\nUser Information:`;
-            
-            if (preferredName) {
-                enhancedContext += `\n- User prefers to be called: ${preferredName}`;
+        let messagesForGemini = [
+            {
+                role: "user", // This acts as the system prompt + dynamic data
+                parts: [{ text: SYSTEM_CONTEXT + databaseAnalysisText }]
+            },
+            {
+                role: "model",
+                parts: [{ text: "Understood. I've processed my core instructions and the latest data analysis. I'm ready to continue the conversation." }]
             }
-            
-            // Add more user context as we gather it from preferences
-            if (userPreferences.preferences) {
-                Object.entries(userPreferences.preferences).forEach(([key, value]) => {
-                    if (key !== 'preferred_name') {
-                        enhancedContext += `\n- ${key}: ${value}`;
-                    }
-                });
+        ];
+
+        messagesForGemini = messagesForGemini.concat(actualHistoryForAPI);
+        
+        messagesForGemini.push({
+            role: "user",
+            parts: [{ text: userMessage }]
+        });
+        
+        // 5. Generate response
+        const generationConfig = {
+            maxOutputTokens: 2000,
+        };
+        
+        const result = await model.generateContent({ contents: messagesForGemini, generationConfig });
+        
+        if (!result.response || result.response.promptFeedback?.blockReason) {
+            console.error('AI response blocked or invalid:', result.response?.promptFeedback);
+            let blockReasonText = result.response?.promptFeedback?.blockReason || "Unknown reason";
+            if (result.response?.promptFeedback?.blockReason === 'SAFETY') {
+                 blockReasonText = "my safety filters were triggered";
             }
+            // Construct a user-friendly error message using the existing pattern
+            let aiError = `Aww, shucks {user}! 😥 I got a bit tongue-tied because ${blockReasonText}. Maybe try asking in a different way? If it keeps happening, you could tell my creator @Cheth! He's super good at fixing things! ✨`;
+            aiError = replaceUserPlaceholders(aiError, message.member || message.author);
+            if (!message.replies?.size) { // Avoid double replying if an error already sent
+                await message.reply(aiError);
+            }
+            return; // Stop further processing for this message
         }
         
-        // Gemini doesn't support system messages as the first message in history
-        // We need to prepend the system context to the first user message instead
-        let promptWithContext = `${enhancedContext}\n\n${userMessage}`;
-        
-        // Variable to store response
-        let responseText;
-        
-        // Check if this is the first message in the conversation
-        if (history.length > 0) {
-            // We have history, so use normal chat with history
-            // Map history to exclude timestamps for the API
-            const historyForAPI = history.map(({ role, parts }) => ({ role, parts }));
-            const chat = model.startChat({
-                history: historyForAPI,
-                generationConfig: {
-                    maxOutputTokens: 2000,
-                }
-            });
-            
-            // Generate response
-            const result = await chat.sendMessage([{ text: userMessage }]);
-            responseText = result.response.text();
-        } else {
-            // First message - include system context
-            const result = await model.generateContent([{ text: promptWithContext }]);
-            responseText = result.response.text();
+        let responseText = result.response.text();
+        if (!responseText) { // Handle cases where text might be empty even if not blocked
+            console.error('AI response text is empty.');
+            let aiError = `Sorry {user}, I seem to be at a loss for words right now! Please try again.`;
+            aiError = replaceUserPlaceholders(aiError, message.member || message.author);
+            if (!message.replies?.size) {
+                await message.reply(aiError);
+            }
+            return;
         }
-          // Check if we should use the preferred name for replacement
+
+        // 6. Post-process and send response
         let userForReplacement = message.member || message.author;
-        if (userPreferences?.preferences?.preferred_name) {
-            // Clone the user object and override the nickname with preferred name
+        if (userData?.preferences?.preferred_name) {
             userForReplacement = { 
-                ...userForReplacement,
-                nickname: userPreferences.preferences.preferred_name 
+                ...userForReplacement, // Spread existing properties
+                nickname: userData.preferences.preferred_name 
             };
         }
-        
-        // Process response to replace placeholders with user information
         responseText = replaceUserPlaceholders(responseText, userForReplacement);
         
-        // Split and send response
         const chunks = splitMessage(responseText);
         for (const chunk of chunks) {
             if (chunk.trim()) {
@@ -717,25 +855,26 @@ client.on('messageCreate', async message => {
             }
         }
         
-        // Update conversation history in database
-        await updateConversationHistory(message.author.id, message.channelId, userMessage, responseText);} catch (error) {
-        console.error('Error:', error);
+        // 7. Update conversation history (with original userMessage and final responseText)
+        await updateConversationHistory(message.author.id, message.channelId, userMessage, responseText);
+
+    } catch (error) {
+        console.error('Error processing AI message:', error);
         
         let errorMessage;
-        // No need to extract username here manually since we'll use replaceUserPlaceholders
-        
-        if (error.status === 429) {
+        // Use a generic error message format, but try to incorporate details if available
+        if (error.message && error.message.includes("AI response generation failed")) { // From our specific AI error
+            errorMessage = error.message; // This message is already user-friendly
+        } else if (error.status === 429) { // Specific to some API errors if they propagate status
             errorMessage = `Sorry {user}, I'm currently handling too many requests. Please try again in a few moments.`;
         } else if (error.status === 404) {
-            errorMessage = `Oops {user}, there was a configuration issue. Please contact the bot administrator.`;
+            errorMessage = `Uh oh, {user}! 🙈 Looks like one of my wires is crossed or something... a little configuration hiccup! My creator @Cheth might need to take a look! 🛠️`;
         } else {
-            errorMessage = `Sorry {user}, I encountered an unexpected error. Let me recalibrate my strings.`;
+            errorMessage = `Sorry {user}, I encountered an unexpected error. Let me recalibrate my strings. My human might need to check the logs: ${error.message || 'No specific error message.'}`;
         }
         
-        // Pass the user object directly 
         errorMessage = replaceUserPlaceholders(errorMessage, message.member || message.author);
         
-        // Send error message only if we haven't already sent one for this message
         if (!message.replies?.size) {
             await message.reply(errorMessage);
         }
@@ -770,9 +909,17 @@ client.on('interactionCreate', async interaction => {
                     name: '💬 How to Chat With Me', 
                     value: 'Just mention me (@Poppy) or reply to one of my messages to start a conversation! I remember our chat context and your preferences between conversations.'
                 },
+                {
+                    name: '🛡️ Automatic URL Scanning',
+                    value: 'I automatically scan URLs shared in chat for malware. If a link is safe, I\'ll react with ✅. If it\'s malicious, I\'ll send a warning.'
+                },
                 { 
                     name: '🌅 Greeting Commands', 
                     value: '`.gm` - Sends a Good Morning image with greeting\n`.ge` - Sends a Good Evening image with greeting\n`.gn` - Sends a Good Night image with greeting' 
+                },
+                {
+                    name: '🛠️ Utility Commands',
+                    value: '`!surl <url>` - Shortens a long URL.\n`!myurls` - Shows your shortened URLs.\n`!anime [category] [options]` - ✨ Summons cute anime pictures! Try `!anime catgirl` or `!anime random +wink`.'
                 },
                 { 
                     name: '🤖 What I Can Help With', 
@@ -804,6 +951,11 @@ client.on('interactionCreate', async interaction => {
 - @Poppy [your message] - Chat with me directly
 - Reply to my messages - Continue our conversation
 
+**AUTOMATIC URL SCANNING:**
+- I automatically check URLs shared in chat for malware.
+- ✅ = Safe URL
+- ⚠️ Warning message = Malicious URL
+
 **GREETING COMMANDS:**
 - .gm - Good Morning image with greeting
 - .ge - Good Evening image with greeting
@@ -819,9 +971,11 @@ client.on('interactionCreate', async interaction => {
 - /remind [task] in [time] - Set a reminder
 - /timer [minutes] - Starts a countdown timer
 - /ping - Bot status check
-- /command - Create and manage custom commands
-- /memory - Manage conversation history
-- /settings - Server configuration (admin only)
+
+**UTILITY COMMANDS:**
+- !surl <url> - Shortens a long URL.
+- !myurls - Shows your shortened URLs.
+- !anime [category] [options] - ✨ Summons cute anime pictures! Try \`!anime catgirl\` or \`!anime random +wink\`.
 
 **WHAT I CAN HELP WITH:**
 • Answer questions and have fun chats
@@ -1186,7 +1340,7 @@ Need more help? Just ask! 💖
     // Server settings (admin only)
     else if (commandName === 'ping') {
         const sent = await interaction.reply({ content: 'Pinging...', fetchReply: true });
-        interaction.editReply(`Pong! Latency is ${sent.createdTimestamp - interaction.createdTimestamp}ms. API Latency is ${Math.round(client.ws.ping)}ms`);
+        interaction.editReply(`Pong! Latency is ${sent.createdTimestamp - interaction.createdTimestamp}ms. API Latency is ${Math.round(client.ws.ping)}ms.`);
     }
     else if (commandName === 'remind') {
         const task = interaction.options.getString('task');
@@ -1313,6 +1467,56 @@ Need more help? Just ask! 💖
             });
         }
     }
+
+    // URL Shortener command
+    else if (commandName === 'surl') {
+        const longUrl = interaction.options.getString('long_url');
+        const shortCode = interaction.options.getString('short_code'); // Can be null
+
+        try {
+            await interaction.deferReply({ ephemeral: true }); // Defer reply as API call might take time
+
+            const apiUrl = 'http://csclub.uwaterloo.ca/~phthakka/1pt-express/addURL';
+            const payload = { long: longUrl };
+            if (shortCode) {
+                payload.short = shortCode;
+            }
+
+            const response = await axios.post(apiUrl, payload);
+
+            if (response.data && response.data.short) {
+                const shortUrl = `https://1pt.co/${response.data.short}`;
+                const embed = new EmbedBuilder()
+                    .setColor(0x5865F2) // Discord blurple
+                    .setTitle('🔗 URL Shortened!')
+                    .setDescription(`Your long URL has been successfully shortened.`)
+                    .addFields(
+                        { name: 'Original URL', value: `\`${longUrl}\`` },
+                        { name: 'Shortened URL', value: `[${shortUrl}](${shortUrl})` }
+                    )
+                    .setFooter({ text: 'Powered by 1pt.co' })
+                    .setTimestamp();
+                
+                if (response.data.message === "Added!" && response.data.receivedRequestedShort === false && shortCode) {
+                    embed.addFields({ name: 'Note', value: `The custom short code \`${shortCode}\` was taken, so a random one was generated.`});
+                }
+
+                await interaction.editReply({ embeds: [embed], ephemeral: false });
+            } else {
+                await interaction.editReply({ content: 'Sorry, I received an unexpected response from the URL shortening service. Please try again later.', ephemeral: true });
+            }
+        } catch (error) {
+            console.error('Error shortening URL:', error.response ? error.response.data : error.message);
+            let errorMessage = 'Oops! Something went wrong while trying to shorten the URL. ';
+            if (error.response && error.response.data && error.response.data.message) {
+                errorMessage += `Service said: "${error.response.data.message}"`;
+            } else {
+                errorMessage += 'Please try again later.';
+            }
+            await interaction.editReply({ content: errorMessage, ephemeral: true });
+        }
+    }
+    // Removed the SURL slash command handler as it's now a prefixed command.
 });
 
 // Handle modals (for forms)
