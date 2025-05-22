@@ -91,6 +91,25 @@ CREATE POLICY service_role_all ON custom_commands TO authenticated USING (true);
 CREATE POLICY service_role_all ON guild_settings TO authenticated USING (true);
 CREATE POLICY service_role_all ON status_messages TO authenticated USING (true);
 
+-- Function to increment command usage count
+CREATE OR REPLACE FUNCTION increment_command_usage(cmd_id UUID)
+RETURNS VOID -- Or you can return the new count: RETURNS INT
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  UPDATE public.custom_commands
+  SET usage_count = usage_count + 1
+  WHERE id = cmd_id;
+END;
+$$;
+
+-- Grant execute permission on the function to the authenticated role.
+-- The bot uses the service_role key which bypasses RLS and has superuser-like privileges,
+-- so explicit grants on functions are often not strictly necessary for service_role calls.
+-- However, granting to 'authenticated' is a good practice if there's any chance
+-- the function might be called by an authenticated user directly via RPC in the future.
+GRANT EXECUTE ON FUNCTION increment_command_usage(UUID) TO authenticated;
+
 -- Sample data for testing (uncomment to use)
 /*
 -- Insert a sample user

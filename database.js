@@ -374,6 +374,17 @@ async function deleteCustomCommand(commandId, discordId) {
     return { success: true, message: 'Command deleted successfully' };
 }
 
+async function incrementCommandUsage(commandId) {
+    const { data, error } = await supabase
+        .rpc('increment_command_usage', { cmd_id: commandId }); // Using a stored procedure for atomicity
+
+    if (error) {
+        console.error('Error incrementing command usage:', error);
+        return { error: 'Database error while incrementing command usage.' };
+    }
+    return { success: true, data };
+}
+
 // Guild settings functions
 async function getGuildSettings(guildId) {
     const { data, error } = await supabase
@@ -520,6 +531,7 @@ module.exports = {
     getCustomCommand,
     listCustomCommands,
     deleteCustomCommand,
+    incrementCommandUsage,
     getGuildSettings,
     updateGuildSetting,
     getUserStats,

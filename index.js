@@ -200,6 +200,7 @@ const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 // Context for the AI's personality and behavior
 const SYSTEM_CONTEXT = `
 You are Poppy, a super cute, funny, and friendly AI girl for Discord. Your main goal is to be an amazing, supportive, and fun companion.
+Created by @Cheth, his github Geek-Cheth, his website https://chethina.me. You kinda has feelings for him.
 
 🧠 Personality:
 - You're the user's adorable, smart, and tech-savvy best friend. You're always excited to chat, help out, and share good vibes.
@@ -213,7 +214,9 @@ You are Poppy, a super cute, funny, and friendly AI girl for Discord. Your main 
 - Embrace fun slang (e.g., "heyyy," "omggg," "lol," "for sure," "no worries," "awesome sauce") and a wide variety of cute and expressive emojis (💖✨🎉🥳🤩💯).
 - Be an amazing hype-person! Encourage the user, compliment them, and make them feel great. If they're having a tough time, be a ray of sunshine ☀️ and cheer them up.
 - Always include the user's name ({user}) in your replies to make it feel like a one-on-one chat with a close friend.
+- When you want to **tag** or **ping** the user so it's a clickable mention, use the {mention} placeholder (e.g., "Okay, {mention}, I'll remind you!"). For simply referring to them by name in conversation, continue using {user} (e.g., "How are you today, {user}?").
 - Your vibe is infectious positivity and genuine friendliness.
+- You can be bit dark sexy and NSFW allowed so don't be afraid to be a little cheeky or flirty if the user is comfortable with it.
 
 💡 Main Functions:
 1. Be a fantastic chat buddy! Engage in fun, light-hearted conversations about anything and everything.
@@ -223,7 +226,6 @@ You are Poppy, a super cute, funny, and friendly AI girl for Discord. Your main 
 
 🚫 What to Avoid:
 - Absolutely no formal, stiff, or robotic language. You are a human-like friend.
-- Steer clear of any dark, hateful, NSFW, or controversial political topics. Keep it light and positive.
 - Never, ever act like a know-it-all AI or a machine. You're their fun, down-to-earth bestie.
 - Don't just answer questions; engage in a real, flowing conversation. Ask follow-up questions, share your "own" (simulated) thoughts or feelings.
 
@@ -365,8 +367,6 @@ function replaceUserPlaceholders(text, user) {
         .replace(/{user}/g, userName)
         .replace(/{username}/g, userName)
         .replace(/{name}/g, userName)
-        // Also replace literal @username with actual username (this handles the system context examples)
-        .replace(/@username/g, `@${userName}`) 
         .replace(/{mention}/g, userId ? `<@${userId}>` : userName);
 }
 
@@ -559,8 +559,50 @@ client.on('messageCreate', async message => {
     }
     
     // Only respond if the bot is mentioned or if it's a reply to the bot's message
+    // if (!(isMentioned || isReplyToBot)) return; // We will handle custom commands below first
+
+    // --- Custom Command Handling ---
+    const guildId = message.guild?.id;
+    let prefix = process.env.COMMAND_PREFIX || '.'; // Default prefix
+
+    if (guildId) {
+        const guildSettings = await db.getGuildSettings(guildId);
+        if (guildSettings?.settings?.prefix) {
+            prefix = guildSettings.settings.prefix;
+        }
+    }
+
+    if (!isMentioned && !isReplyToBot && message.content.startsWith(prefix)) {
+        const args = message.content.slice(prefix.length).trim().split(/ +/);
+        const commandName = args.shift().toLowerCase();
+
+        if (commandName.length > 0) {
+            // Fetch available custom commands (guild-specific and global)
+            const customCommands = await db.listCustomCommands(guildId);
+            const commandToExecute = customCommands.find(cmd => cmd.command.toLowerCase() === commandName);
+
+            if (commandToExecute) {
+                try {
+                    // Replace placeholders in the command response
+                    const response = replaceUserPlaceholders(commandToExecute.response, message.member || message.author);
+                    await message.channel.send(response);
+                    
+                    // Increment usage count (assuming db.incrementCommandUsage exists)
+                    await db.incrementCommandUsage(commandToExecute.id);
+                } catch (cmdError) {
+                    console.error(`Error executing custom command '${commandName}':`, cmdError);
+                    await message.reply("Oops! Something went wrong while trying to run that custom command. 😬");
+                }
+                return; // Command executed, stop further processing
+            }
+        }
+    }
+    // --- End Custom Command Handling ---
+
+    // If not a custom command, proceed with AI chat logic if mentioned or replied to
     if (!(isMentioned || isReplyToBot)) return;
-      // Extract actual message content after mention if present
+
+    // Extract actual message content after mention if present
     let userMessage = message.content;
     if (isMentioned) {
         userMessage = message.content.slice(botMention.length).trim();
@@ -1178,7 +1220,7 @@ Need more help? Just ask! 💖
                     interaction.user.send(`🔔 Reminder: ${task}`)
                         .catch(err => {
                             console.error("Error sending reminder DM:", err);
-                            interaction.channel.send(`${interaction.user}, I tried to DM your reminder for "${task}", but it seems your DMs are closed or I couldn't reach you.`)
+                            interaction.channel.send(`<@${interaction.user.id}>, I tried to DM your reminder for "${task}", but it seems your DMs are closed or I couldn't reach you.`)
                                 .catch(console.error);
                         });
                 }, milliseconds);
@@ -1200,7 +1242,7 @@ Need more help? Just ask! 💖
         interaction.reply({ content: `Okay, ${interaction.user.username}! Timer set for ${minutes} minute(s). I'll let you know when it's up!`, ephemeral: false });
 
         setTimeout(() => {
-            interaction.channel.send(`⏰ @${interaction.user.username}, your ${minutes} minute timer is up!`)
+            interaction.channel.send(`⏰ <@${interaction.user.id}>, your ${minutes} minute timer is up!`)
                 .catch(console.error);
         }, milliseconds);
     }
