@@ -51,6 +51,14 @@ const supabase = createClient(
  *  - short_code: TEXT (the unique path segment of the shortened URL, e.g., pEqXje)
  *  - short_url: TEXT (full shortened URL, e.g., https://cleanuri.com/pEqXje)
  *  - created_at: Timestamp
+ * 
+ * Table: warnings
+ *  - id: UUID (primary key)
+ *  - guild_id: String
+ *  - user_id: String (discord_id)
+ *  - moderator_id: String (discord_id)
+ *  - reason: TEXT
+ *  - created_at: Timestamp
  */
 
 // User management functions
@@ -529,27 +537,94 @@ async function getRandomStatusMessage() {
     return null; // No messages found
 }
 
-module.exports = {
-    getUser,
-    createOrUpdateUser,
-    updateUserPreference,
-    saveConversation,
-    getConversation,
-    createCustomCommand,
-    getCustomCommand,
-    listCustomCommands,
-    deleteCustomCommand,
-    incrementCommandUsage,
-    getGuildSettings,
-    updateGuildSetting,
-    getUserStats,
-    getRandomStatusMessage,
-    saveShortenedUrl,
-    getUserShortenedUrls,
-    getScannedUrl,
-    saveScannedUrl,
-    updateScannedUrl
-};
+// --- Warning System Functions ---
+
+/**
+ * Add a warning to a user
+ * @param {string} guildId The guild ID where the warning was issued
+ * @param {string} userId The Discord ID of the warned user
+ * @param {string} moderatorId The Discord ID of the moderator
+ * @param {string} reason The reason for the warning
+ * @returns {Promise<object|null>} The created warning record or null on error
+ */
+async function addWarning(guildId, userId, moderatorId, reason) {
+    const { data, error } = await supabase
+        .from('warnings')
+        .insert({
+            guild_id: guildId,
+            user_id: userId,
+            moderator_id: moderatorId,
+            reason: reason,
+            created_at: new Date()
+        })
+        .select()
+        .single();
+
+    if (error) {
+        console.error('Error adding warning:', error);
+        return null;
+    }
+    return data;
+}
+
+/**
+ * Get all warnings for a user in a guild
+ * @param {string} guildId The guild ID
+ * @param {string} userId The Discord ID of the user
+ * @returns {Promise<Array>} Array of warnings or empty array on error
+ */
+async function getWarnings(guildId, userId) {
+    const { data, error } = await supabase
+        .from('warnings')
+        .select('*')
+        .eq('guild_id', guildId)
+        .eq('user_id', userId)
+        .order('created_at', { ascending: false });
+
+    if (error) {
+        console.error('Error fetching warnings:', error);
+        return [];
+    }
+    return data || [];
+}
+
+/**
+ * Clear all warnings for a user in a guild
+ * @param {string} guildId The guild ID
+ * @param {string} userId The Discord ID of the user
+ * @returns {Promise<boolean>} True if successful, false on error
+ */
+async function clearWarnings(guildId, userId) {
+    const { error } = await supabase
+        .from('warnings')
+        .delete()
+        .eq('guild_id', guildId)
+        .eq('user_id', userId);
+
+    if (error) {
+        console.error('Error clearing warnings:', error);
+        return false;
+    }
+    return true;
+}
+
+/**
+ * Remove a specific warning by ID
+ * @param {string} warningId The warning ID to remove
+ * @returns {Promise<boolean>} True if successful, false on error
+ */
+async function removeWarning(warningId) {
+    const { error } = await supabase
+        .from('warnings')
+        .delete()
+        .eq('id', warningId);
+
+    if (error) {
+        console.error('Error removing warning:', error);
+        return false;
+    }
+    return true;
+}
 
 // --- Scanned URL Cache Functions ---
 
@@ -673,3 +748,29 @@ async function getUserShortenedUrls(discordId, limit = 10, offset = 0) {
     }
     return data;
 }
+
+module.exports = {
+    getUser,
+    createOrUpdateUser,
+    updateUserPreference,
+    saveConversation,
+    getConversation,
+    createCustomCommand,
+    getCustomCommand,
+    listCustomCommands,
+    deleteCustomCommand,
+    incrementCommandUsage,
+    getGuildSettings,
+    updateGuildSetting,
+    getUserStats,
+    getRandomStatusMessage,
+    saveShortenedUrl,
+    getUserShortenedUrls,
+    getScannedUrl,
+    saveScannedUrl,
+    updateScannedUrl,
+    addWarning,
+    getWarnings,
+    clearWarnings,
+    removeWarning
+};

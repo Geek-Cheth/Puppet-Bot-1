@@ -26,6 +26,8 @@ const db = require('./database');
 const { handleShortenUrlCommand, handleMyUrlsCommand } = require('./surl');
 const { checkUrlMalware } = require('./virusScanner');
 const animeCommand = require('./anime');
+const { adminCommands } = require('./commands/admin');
+const { adminSlashCommands } = require('./commands/adminCommands');
 
 // Initialize Discord client
 const client = new Client({
@@ -33,7 +35,9 @@ const client = new Client({
         GatewayIntentBits.Guilds,
         GatewayIntentBits.GuildMessages,
         GatewayIntentBits.MessageContent,
-        GatewayIntentBits.GuildMessageReactions
+        GatewayIntentBits.GuildMessageReactions,
+        GatewayIntentBits.GuildMembers,
+        GatewayIntentBits.GuildModeration
     ],
     partials: [
         Partials.Message,
@@ -189,9 +193,11 @@ async function registerCommands() {
     try {
         console.log('Started refreshing application (/) commands.');
 
+        const allCommands = commands.concat(adminSlashCommands);
+
         await rest.put(
             Routes.applicationCommands(process.env.CLIENT_ID),
-            { body: commands.map(command => command.toJSON()) },
+            { body: allCommands.map(command => command.toJSON()) },
         );
 
         console.log('Successfully reloaded application (/) commands.');
@@ -737,11 +743,26 @@ client.on('messageCreate', async message => {
         const customCommands = await db.listCustomCommands(message.guild?.id);
         // const guildSettings = await db.getGuildSettings(message.guild?.id); // Optional, if needed
 
+        const guild = message.guild;
+        const channel = message.channel;
+
         // 2. Construct databaseAnalysisContext string
-        let databaseAnalysisText = "\n\n## Live Database Analysis for This Interaction:\n";
+        let databaseAnalysisText = "\n\n## Live Interaction Analysis:\n"; // Renamed for clarity
+
+        databaseAnalysisText += "### Current Location:\n";
+        if (guild) {
+            databaseAnalysisText += `- Server: ${guild.name} (ID: ${guild.id})\n`;
+        } else {
+            databaseAnalysisText += "- Context: Direct Message\n";
+        }
+        databaseAnalysisText += `- Channel: ${channel.name} (ID: ${channel.id}, Type: ${channel.type})\n`;
+        // ChannelType.DM is 1. We only want topic for non-DM guild channels.
+        if (channel.topic && channel.type !== 1) {
+             databaseAnalysisText += `- Channel Topic: ${channel.topic}\n`;
+        }
         
-        databaseAnalysisText += "### User Information:\n";
-        const userForContext = userStats?.user || userData; 
+        databaseAnalysisText += "\n### User Information:\n";
+        const userForContext = userStats?.user || userData;
         if (userForContext) {
             databaseAnalysisText += `- Display Name: ${userForContext.nickname || userForContext.username}\n`;
             databaseAnalysisText += `- Discord ID: ${userForContext.discord_id}\n`;
@@ -786,31 +807,43 @@ client.on('messageCreate', async message => {
 
         // 4. Prepare messages for Gemini
         const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+
+        const systemInstructionContent = {
+            parts: [{ text: SYSTEM_CONTEXT }],
+            // role: "system" // Role is optional for systemInstruction parts as per some SDK examples,
+                            // but Content type does have it. Included for clarity.
+        };
         
-        let messagesForGemini = [
+        let contentsForGemini = [
             {
-                role: "user", // This acts as the system prompt + dynamic data
-                parts: [{ text: SYSTEM_CONTEXT + databaseAnalysisText }]
+                role: "user",
+                parts: [{ text: "This is a real-time analysis of the current interaction context:\n" + databaseAnalysisText + "\n\nPlease use this information to enhance your responses and make them more relevant to the current situation." }]
             },
             {
                 role: "model",
-                parts: [{ text: "Understood. I've processed my core instructions and the latest data analysis. I'm ready to continue the conversation." }]
+                parts: [{ text: "Understood. I've processed my core instructions (provided separately via system instruction) and this real-time context analysis. I'm ready to continue the conversation, keeping all this in mind!" }]
             }
         ];
 
-        messagesForGemini = messagesForGemini.concat(actualHistoryForAPI);
+        // Append actual conversation history
+        contentsForGemini = contentsForGemini.concat(actualHistoryForAPI);
         
-        messagesForGemini.push({
+        // Append the current user message
+        contentsForGemini.push({
             role: "user",
             parts: [{ text: userMessage }]
         });
         
         // 5. Generate response
         const generationConfig = {
-            maxOutputTokens: 2000,
+            maxOutputTokens: 2000, // Keep existing config, can be tuned later
         };
         
-        const result = await model.generateContent({ contents: messagesForGemini, generationConfig });
+        const result = await model.generateContent({
+            contents: contentsForGemini,
+            systemInstruction: systemInstructionContent,
+            generationConfig
+        });
         
         if (!result.response || result.response.promptFeedback?.blockReason) {
             console.error('AI response blocked or invalid:', result.response?.promptFeedback);
@@ -887,6 +920,23 @@ client.on('interactionCreate', async interaction => {
 
     const { commandName } = interaction;    
     
+    // ADMIN COMMAND HANDLING - Add this section first
+    if (adminCommands[commandName]) {
+        try {
+            await adminCommands[commandName](interaction);
+        } catch (error) {
+            console.error(`Error executing admin command ${commandName}:`, error);
+            const errorMessage = 'There was an error executing this command!';
+            
+            if (interaction.replied || interaction.deferred) {
+                await interaction.followUp({ content: errorMessage, ephemeral: true });
+            } else {
+                await interaction.reply({ content: errorMessage, ephemeral: true });
+            }
+        }
+        return; // Important: return here to prevent falling through to other commands
+    }
+    
     // Update or create user record in database on any interaction
     const userToUpdate = {
         discord_id: interaction.user.id,
@@ -928,6 +978,10 @@ client.on('interactionCreate', async interaction => {
                 {
                     name: '📝 Slash Commands',
                     value: '`/help` - Shows this help information\n`/profile` - View and edit your user profile\n`/stats` - View your conversation statistics\n`/command` - Create and manage custom commands\n`/memory` - Manage conversation history\n`/settings` - Server configuration (admin only)\n`/remind [task] in [time]` - Set a reminder\n`/timer [minutes]` - Starts a countdown timer\n`/ping` - Bot status check'
+                },
+                {
+                    name: '🛡️ Admin Commands (Admin Only)',
+                    value: '`/admin-warn` - Issue warnings to users\n`/admin-warnings` - View user warnings\n`/admin-kick` - Kick users from server\n`/admin-ban` - Ban users from server\n`/admin-timeout` - Timeout users\n`/admin-clear` - Clear chat messages'
                 },
                 {
                     name: '💡 Tips for Best Results', 
