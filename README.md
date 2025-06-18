@@ -77,12 +77,12 @@ The `scanned_urls` table is used to cache the results of URL scans from urlscan.
 ### Utility Commands
 
 - `!surl <url_to_shorten>`: Shortens a long URL using the CleanURI service. Example: `!surl https://very.long.url/goes/here`
-- `!anime [category] [count:N] [+tag] [-tag]`: Fetches and displays random anime images from the Nekosia API (shows image only).
+- `.anime [category] [count:N] [+tag] [-tag]`: Fetches and displays random anime images from the Nekosia API (shows image only).
   - `[category]`: (Optional) Specify a category like `catgirl`, `foxgirl`, `cute`. Defaults to `random`.
   - `[count:N]`: (Optional) Number of images to fetch (1-48). Defaults to 1. Example: `count:3`.
   - `[+tag]`: (Optional) Add tags to include in the search. Example: `+white-hair`.
   - `[-tag]`: (Optional) Add tags to exclude from the search. Example: `-sad`.
-  - Example: `!anime cute count:2 +uniform -short-hair`
+  - Example: `.anime cute count:2 +uniform -short-hair`
 
 ### Greeting Commands
 

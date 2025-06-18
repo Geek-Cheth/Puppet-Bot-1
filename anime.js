@@ -80,7 +80,7 @@ async function fetchAnimeImage(args, userId) {
 
 module.exports = {
     name: 'anime',
-    description: 'Fetches a random anime image from Nekosia API. Usage: !anime [category] [count:N] [+tag1] [-tag2]',
+    description: 'Fetches a random anime image from Nekosia API. Usage: .anime [category] [count:N] [+tag1] [-tag2]',
     async execute(message, args) {
         const userId = message.author.id;
         const images = await fetchAnimeImage(args, userId);

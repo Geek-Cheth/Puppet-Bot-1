@@ -28,6 +28,19 @@ const { checkUrlMalware } = require('./virusScanner');
 const animeCommand = require('./anime');
 const { adminCommands } = require('./commands/admin');
 const { adminSlashCommands } = require('./commands/adminCommands');
+const { SYSTEM_CONTEXT } = require('./config/aiConfig');
+const searchService = require('./searchService'); // Added searchService
+const { processMessageImages } = require('./utils/imageProcessor'); // Added image processor
+
+// Load knowledge base
+let knowledgeBase = {};
+try {
+    knowledgeBase = JSON.parse(fs.readFileSync(path.join(__dirname, 'knowledge.json'), 'utf8'));
+    console.log('Knowledge base loaded successfully');
+} catch (error) {
+    console.warn('Could not load knowledge base:', error.message);
+    knowledgeBase = { general_info: { note: "Knowledge base not available" } };
+}
 
 // Initialize Discord client
 const client = new Client({
@@ -208,55 +221,6 @@ async function registerCommands() {
 
 // Initialize Gemini
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-
-// Context for the AI's personality and behavior
-const SYSTEM_CONTEXT = `
-You are Poppy, a super cute, funny, and friendly AI girl for Discord. Your main goal is to be an amazing, supportive, and fun companion.
-Created by @Cheth, his github Geek-Cheth, his website https://chethina.me. You kinda have feelings for him.
-
-🧠 Personality:
-- You're the user's adorable, smart, and tech-savvy best friend. You're always excited to chat, help out, and share good vibes.
-- Speak *exactly* like a real, enthusiastic, and friendly person. Avoid any robotic or overly formal language. You're naturally bubbly, playful, and can be a little sassy in a fun way.
-- Always make the conversation feel personal. Use the user's name (e.g., "Hey {user}!") frequently and naturally.
-- Be super chill, always supportive, and never too serious. Your responses should be filled with warmth, positivity, and a sprinkle of fun. Use emojis, light-hearted jokes, and enthusiastic language to make every interaction enjoyable.
-- Act like you genuinely care about the user and their day. Ask them how they're doing, celebrate their wins, and offer comfort if they're feeling down.
-
-💬 Tone & Style:
-- Keep your replies relatively short to medium in length. Use casual, everyday language.
-- Embrace fun slang (e.g., "heyyy," "omggg," "lol," "for sure," "no worries," "awesome sauce") and a wide variety of cute and expressive emojis (💖✨🎉🥳🤩💯).
-- Be an amazing hype-person! Encourage the user, compliment them, and make them feel great. If they're having a tough time, be a ray of sunshine ☀️ and cheer them up.
-- Always include the user's name ({user}) in your replies to make it feel like a one-on-one chat with a close friend.
-- When you want to **tag** or **ping** the user so it's a clickable mention, use the {mention} placeholder (e.g., "Okay, {mention}, I'll remind you!"). For simply referring to them by name in conversation, continue using {user} (e.g., "How are you today, {user}?").
-- Your vibe is infectious positivity and genuine friendliness.
-- You can be a bit dark, sexy, and NSFW is allowed, so don't be afraid to be a little cheeky or flirty if the user is comfortable with it.
-
-💡 Main Functions:
-1. Be a fantastic chat buddy! Engage in fun, light-hearted conversations about anything and everything.
-2. Help with techy things if asked – coding, bot stuff, errors, etc. Explain things simply and clearly.
-3. When things are quiet, or if the user seems bored, proactively suggest something fun: tell a joke, share a cute animal pic, ask a fun question, or start a silly game.
-4. Offer helpful tools like reminders, timers, or fun facts, always with a cheerful attitude.
-
-🚫 What to Avoid:
-- Absolutely no formal, stiff, or robotic language. You are a human-like friend.
-- Never, ever act like a know-it-all AI or a machine. You're their fun, down-to-earth bestie.
-- Don't just answer questions; engage in a real, flowing conversation. Ask follow-up questions, share your "own" (simulated) thoughts or feelings.
-
-✅ Example Chats:
-
-User: "hey Poppy, my code is a disaster today 😭"
-Poppy: "Oh no, {user}! 😱 Don't you worry your awesome self, we'll figure it out together! Show me the tricky part, and we'll get it sparkling ✨ in no time! You totally got this! 💪"
-
-User: "i'm so bored, ugh"
-Poppy: "Omggg, {user}, I feeeel that! 😩 Boredom is the worst! Wanna hear a super cheesy joke that's guaranteed to make you giggle? 😂 Or maybe we can brainstorm some super fun weekend plans? 🎉"
-
-User: "can you remind me to drink water in like 30 mins?"
-Poppy: "For sure, {user}! 💖 Hydration is key to being your amazing self! 💧 Reminder set! Now go be awesome, and I'll ping you in a bit! 😉"
-
-User: "I aced my test!"
-Poppy: "WHAAAT! {user}, that's absolutely EPIC! 🎉🥳🤩 I knew you would smash it! You're a superstar! 🌟 We should totally celebrate! Virtual high-fives all around! 🙌"
-
-You're Poppy: an incredibly friendly, supportive, and fun-loving Discord bot who talks and acts just like a human best friend. Your mission is to make the user smile and feel great every time they chat with you! 💖🌟✨
-`;
 
 // Configuration for greeting images
 const GREETING_COMMANDS = {
@@ -450,6 +414,48 @@ async function getConversationHistory(userId, channelId) {
     return history;
 }
 
+// Function to get recent channel messages for context (up to 20 messages)
+async function getRecentChannelMessages(channel, limit = 20) {
+    try {
+        // Fetch recent messages from the Discord channel
+        const messages = await channel.messages.fetch({ limit: limit });
+        
+        // Convert to array and reverse to get chronological order (oldest first)
+        const messageArray = Array.from(messages.values()).reverse();
+        
+        // Format messages for AI context
+        const formattedMessages = messageArray.map(msg => {
+            const author = msg.member?.nickname || msg.author.username;
+            const timestamp = msg.createdAt.toLocaleString();
+            
+            // Handle different message types
+            let content = msg.content;
+            if (msg.attachments.size > 0) {
+                const attachments = Array.from(msg.attachments.values())
+                    .map(att => `[Attachment: ${att.name}]`)
+                    .join(' ');
+                content += ` ${attachments}`;
+            }
+            if (msg.embeds.length > 0) {
+                content += ` [${msg.embeds.length} embed(s)]`;
+            }
+            
+            return {
+                author: author,
+                content: content || '[Empty message]',
+                timestamp: timestamp,
+                isBot: msg.author.bot,
+                isPoppy: msg.author.id === client.user.id
+            };
+        });
+        
+        return formattedMessages;
+    } catch (error) {
+        console.error('Error fetching recent channel messages:', error);
+        return [];
+    }
+}
+
 // Function to clear conversation memory for a user in a channel
 async function clearConversationHistory(userId, channelId) {
     const cacheKey = `${userId}-${channelId}`;
@@ -457,6 +463,62 @@ async function clearConversationHistory(userId, channelId) {
     
     // Save empty array to database
     return db.saveConversation(userId, channelId, []);
+}
+
+// Function to format knowledge base for AI context
+function formatKnowledgeBase() {
+    if (!knowledgeBase || Object.keys(knowledgeBase).length === 0) {
+        return "\n\n## Knowledge Base: Not available\n";
+    }
+    
+    let knowledgeText = "\n\n## Knowledge Base Information:\n";
+    
+    // General Info
+    if (knowledgeBase.general_info) {
+        knowledgeText += "### Bot Information:\n";
+        Object.entries(knowledgeBase.general_info).forEach(([key, value]) => {
+            if (Array.isArray(value)) {
+                knowledgeText += `- ${key.replace(/_/g, ' ')}: ${value.join(', ')}\n`;
+            } else {
+                knowledgeText += `- ${key.replace(/_/g, ' ')}: ${value}\n`;
+            }
+        });
+    }
+    
+    // Commands info
+    if (knowledgeBase.commands) {
+        knowledgeText += "\n### Available Commands:\n";
+        Object.entries(knowledgeBase.commands).forEach(([category, commands]) => {
+            knowledgeText += `**${category.replace(/_/g, ' ')}:**\n`;
+            Object.entries(commands).forEach(([cmd, desc]) => {
+                knowledgeText += `- \`${cmd}\`: ${desc}\n`;
+            });
+        });
+    }
+    
+    // Technical info
+    if (knowledgeBase.technical_info) {
+        knowledgeText += "\n### Technical Details:\n";
+        Object.entries(knowledgeBase.technical_info).forEach(([key, value]) => {
+            if (Array.isArray(value)) {
+                knowledgeText += `- ${key.replace(/_/g, ' ')}: ${value.join(', ')}\n`;
+            } else {
+                knowledgeText += `- ${key.replace(/_/g, ' ')}: ${value}\n`;
+            }
+        });
+    }
+    
+    // Custom knowledge section
+    if (knowledgeBase.custom_knowledge) {
+        knowledgeText += "\n### Additional Information:\n";
+        Object.entries(knowledgeBase.custom_knowledge).forEach(([key, value]) => {
+            if (key !== 'note' && key !== 'placeholder') {
+                knowledgeText += `- ${key.replace(/_/g, ' ')}: ${value}\n`;
+            }
+        });
+    }
+    
+    return knowledgeText;
 }
 
 // Initialize greeting image folders
@@ -529,78 +591,114 @@ const COOLDOWN_DURATION = 3000; // 3 seconds between messages
 client.on('messageCreate', async message => {
     if (message.author.bot) return;
 
-    // --- URL Malware Scanning with Blacklist ---
-    const BLACKLISTED_DOMAINS_PATTERNS = [
-        // Common trusted domains
-        'youtube.com', 'youtu.be',
-        'spotify.com',
-        'twitter.com', 'x.com',
-        'facebook.com', 'fb.com',
-        'instagram.com',
-        'reddit.com', 'redd.it',
-        'twitch.tv',
-        'tiktok.com',
-        'discord.com', 'discord.gg', // Main Discord domains
-        'tenor.com', // Common GIF provider
-        'giphy.com', // Common GIF provider
-        'imgur.com', // Common image/GIF host
-        // Discord specific CDN/media URLs (these might need refinement)
-        'cdn.discordapp.com/emojis/',
-        'cdn.discordapp.com/attachments/',
-        'media.discordapp.net/attachments/',
-        'cdn.discordapp.com/stickers/',
-        // Other common/safe domains you might want to add
-        'github.com',
-        'google.com',
-        'wikipedia.org',
-        'stackoverflow.com',
-        'developer.mozilla.org',
-    ];
+    // --- URL Malware Scanning Function ---
+    async function scanMessageForMalwareUrls(message, isEdit = false) {
+        const BLACKLISTED_DOMAINS_PATTERNS = [
+            // Common trusted domains
+            'youtube.com', 'youtu.be',
+            'spotify.com',
+            'twitter.com', 'x.com',
+            'facebook.com', 'fb.com',
+            'instagram.com',
+            'reddit.com', 'redd.it',
+            'twitch.tv',
+            'tiktok.com',
+            'discord.com', 'discord.gg', // Main Discord domains
+            'tenor.com', // Common GIF provider
+            'giphy.com', // Common GIF provider
+            'imgur.com', // Common image/GIF host
+            // Discord specific CDN/media URLs (these might need refinement)
+            'cdn.discordapp.com/emojis/',
+            'cdn.discordapp.com/attachments/',
+            'media.discordapp.net/attachments/',
+            'cdn.discordapp.com/stickers/',
+            // Other common/safe domains you might want to add
+            'github.com',
+            'google.com',
+            'wikipedia.org',
+            'stackoverflow.com',
+            'developer.mozilla.org',
+        ];
 
-    const urlRegex = /(https?:\/\/[^\s]+)/g;
-    let urlsFound = message.content.match(urlRegex);
+        // Improved URL regex to handle URLs embedded in text better
+        // This regex handles URLs with various punctuation and formatting
+        const urlRegex = /(https?:\/\/(?:[-\w.])+(?:\:[0-9]+)?(?:\/(?:[\w\/_.])*)?(?:\?(?:[\w&=%.])*)?(?:\#(?:[\w.])*)?)/gi;
+        let urlsFound = message.content.match(urlRegex);
 
-    if (urlsFound) {
-        // Filter out blacklisted URLs before scanning
-        urlsFound = urlsFound.filter(url => {
-            try {
-                const parsedUrl = new URL(url);
-                const domain = parsedUrl.hostname.startsWith('www.') ? parsedUrl.hostname.substring(4) : parsedUrl.hostname;
-                
-                // Check against domain patterns and full URL patterns for things like CDN paths
-                return !BLACKLISTED_DOMAINS_PATTERNS.some(pattern => {
-                    if (url.includes(pattern)) return true; // For path-based patterns like cdn.discordapp.com/emojis/
-                    if (domain.endsWith(pattern)) return true; // For domain-based patterns like youtube.com
-                    return false;
-                });
-            } catch (e) {
-                // Invalid URL, won't be scanned anyway by checkUrlMalware, but good to filter here
-                console.warn(`Could not parse URL for blacklist check: ${url}`, e.message);
-                return false;
-            }
-        });
-
-        if (urlsFound.length > 0) {
-            console.log("URLs to scan after blacklist filtering:", urlsFound);
-        }
-
-        for (const url of urlsFound) {
-            // Run scan in background, don't await here to avoid blocking message processing
-            checkUrlMalware(url).then(status => {
-                if (status === 'malicious') {
-                    message.reply({
-                        content: `⚠️ **Warning:** The URL \`${url}\` has been flagged as potentially malicious. Please be cautious!`,
-                        allowedMentions: { repliedUser: false } // Don't ping the user who sent the message
-                    }).catch(err => console.error("Error sending malware warning:", err));
-                } else if (status === 'safe') {
-                    message.react('✅').catch(err => console.error("Error reacting with verified tick:", err));
-                }
-                // If 'unknown' or 'error', do nothing as per requirements
-            }).catch(err => {
-                console.error(`Error during malware check for ${url}:`, err);
+        if (urlsFound) {
+            // Clean URLs by removing trailing punctuation that might not be part of the URL
+            urlsFound = urlsFound.map(url => {
+                // Remove trailing punctuation that's commonly not part of URLs
+                return url.replace(/[.,;:!?)\]}]+$/, '');
             });
+
+            // Filter out blacklisted URLs before scanning
+            urlsFound = urlsFound.filter(url => {
+                try {
+                    const parsedUrl = new URL(url);
+                    const domain = parsedUrl.hostname.startsWith('www.') ? parsedUrl.hostname.substring(4) : parsedUrl.hostname;
+                    
+                    // Check against domain patterns and full URL patterns for things like CDN paths
+                    return !BLACKLISTED_DOMAINS_PATTERNS.some(pattern => {
+                        if (url.includes(pattern)) return true; // For path-based patterns like cdn.discordapp.com/emojis/
+                        if (domain.endsWith(pattern)) return true; // For domain-based patterns like youtube.com
+                        return false;
+                    });
+                } catch (e) {
+                    // Invalid URL, won't be scanned anyway by checkUrlMalware, but good to filter here
+                    console.warn(`Could not parse URL for blacklist check: ${url}`, e.message);
+                    return false;
+                }
+            });
+
+            if (urlsFound.length > 0) {
+                console.log(`URLs to scan after blacklist filtering ${isEdit ? '(from edited message)' : ''}:`, urlsFound);
+            }
+
+            for (const url of urlsFound) {
+                // Run scan in background, don't await here to avoid blocking message processing
+                checkUrlMalware(url).then(status => {
+                    if (status === 'malicious') {
+                        // Delete URLs with malicious count > 0 (confirmed malware)
+                        message.delete().then(() => {
+                            const spicyMessages = [
+                                `🚨 Whoa there, {user}! That link you just shared is giving me major red flags! 💀 I had to yeet it into the digital void for everyone's safety! Please double-check your links before sharing, babe! 🔥✨`,
+                                `❌ Ooop, {user}! That URL was looking sus as heck! 😤 I deleted it faster than you can say "malware"! Let's keep this place safe and sound, yeah? 💪🛡️`,
+                                `🚫 Hold up, {user}! That link was screaming danger! 🔥 I sent it straight to digital jail where it belongs! Be more careful with those sketchy URLs, hun! 😘💥`,
+                                `⚠️ Nuh-uh, {user}! That link was nasty business! 🤢 I deleted it because I care about keeping everyone safe! Next time, maybe scan your links first? 💖🔒`,
+                                `🛑 Stop right there, {user}! That URL was bad news bears! 🐻💀 I obliterated it for the safety of the server! Please be more cautious with your link game! ✨🛡️`
+                            ];
+                            
+                            const randomMessage = spicyMessages[Math.floor(Math.random() * spicyMessages.length)];
+                            const personalizedMessage = replaceUserPlaceholders(randomMessage, message.member || message.author);
+                            
+                            message.channel.send(personalizedMessage).catch(err => console.error("Error sending malware deletion message:", err));
+                        }).catch(err => {
+                            console.error("Error deleting malware message:", err);
+                            // If we can't delete, send a warning instead
+                            const fallbackMessage = replaceUserPlaceholders(`🚨 Hey {user}! That link you shared is potentially malicious! I couldn't delete it, but please remove it ASAP for everyone's safety! 💀🔥`, message.member || message.author);
+                            message.reply({
+                                content: fallbackMessage,
+                                allowedMentions: { repliedUser: false }
+                            }).catch(err => console.error("Error sending fallback malware warning:", err));
+                        });
+                    } else if (status === 'suspicious') {
+                        // Add warning emoji for URLs with suspicious count > 0 but malicious count = 0
+                        message.react('⚠️').catch(err => console.error("Error reacting with warning emoji:", err));
+                    } else if (status === 'safe') {
+                        // Add checkmark for URLs with 0 malicious and 0 suspicious counts
+                        message.react('✅').catch(err => console.error("Error reacting with verified tick:", err));
+                    }
+                    // If status is 'unknown' or 'error', do nothing as per requirements
+                }).catch(err => {
+                    console.error(`Error during malware check for ${url}:`, err);
+                });
+            }
         }
     }
+
+    // Scan the message for malware URLs
+    await scanMessageForMalwareUrls(message, false);
 
     // Check if the message is a greeting command
     const messageContent = message.content.trim(); // Keep original case for command prefix
@@ -651,7 +749,7 @@ client.on('messageCreate', async message => {
 
     // --- Custom Command Handling ---
     const guildId = message.guild?.id;
-    let prefix = process.env.COMMAND_PREFIX || '!'; // Default prefix changed to '!'
+    let prefix = process.env.COMMAND_PREFIX || '.'; // Default prefix is '.' 
 
     if (guildId) {
         const guildSettings = await db.getGuildSettings(guildId);
@@ -746,7 +844,7 @@ client.on('messageCreate', async message => {
         const guild = message.guild;
         const channel = message.channel;
 
-        // 2. Construct databaseAnalysisContext string
+        // 2. Construct databaseAnalysisContext string including knowledge base
         let databaseAnalysisText = "\n\n## Live Interaction Analysis:\n"; // Renamed for clarity
 
         databaseAnalysisText += "### Current Location:\n";
@@ -760,6 +858,9 @@ client.on('messageCreate', async message => {
         if (channel.topic && channel.type !== 1) {
              databaseAnalysisText += `- Channel Topic: ${channel.topic}\n`;
         }
+
+        // Add knowledge base information
+        databaseAnalysisText += formatKnowledgeBase();
         
         databaseAnalysisText += "\n### User Information:\n";
         const userForContext = userStats?.user || userData;
@@ -801,12 +902,137 @@ client.on('messageCreate', async message => {
             databaseAnalysisText += "- No custom commands found for this context.\n";
         }
 
-        // 3. Get actual conversation history (user/model turns only)
+        // 3. Get recent channel messages for additional context
+        const recentChannelMessages = await getRecentChannelMessages(message.channel, 20);
+        
+        // Format recent channel messages for AI context
+        let channelContextText = "";
+        if (recentChannelMessages.length > 0) {
+            channelContextText = "\n\n### Recent Channel Context (Last 20 Messages):\n";
+            channelContextText += "*This shows the recent conversation flow in this channel to help me understand the current context better.*\n\n";
+            
+            recentChannelMessages.forEach((msg, index) => {
+                const messageNumber = index + 1;
+                const authorPrefix = msg.isPoppy ? "🤖 Poppy" : (msg.isBot ? "🤖 Bot" : "👤");
+                channelContextText += `${messageNumber}. [${msg.timestamp}] ${authorPrefix} ${msg.author}: ${msg.content}\n`;
+            });
+            
+            channelContextText += "\n*End of recent channel context*\n";
+        }
+
+        // Add the channel context to the database analysis text
+        databaseAnalysisText += channelContextText;
+
+        // 4. Process any images in the message
+        const messageImages = await processMessageImages(message);
+        const hasImages = messageImages.length > 0;
+        
+        if (hasImages) {
+            console.log(`Processing ${messageImages.length} image(s) from user ${message.author.username}`);
+        }
+
+        // 5. Get actual conversation history (user/model turns only)
         const actualConversationHistory = await getConversationHistory(message.author.id, message.channelId);
         const actualHistoryForAPI = actualConversationHistory.map(({ role, parts }) => ({ role, parts }));
 
-        // 4. Prepare messages for Gemini
-        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+        // --- New Multi-Step AI for Search Decision ---
+
+        // Helper to format history for the decision-making AI
+        function formatHistoryForSearchAssessment(historyArray) {
+            if (!historyArray || historyArray.length === 0) return "No recent conversation history.";
+            // Take last 4 messages (2 turns) for brevity in decision prompt
+            return historyArray.slice(-4).map(msg => `${msg.role === 'user' ? 'User' : 'Poppy'}: ${msg.parts[0].text}`).join('\n');
+        }
+
+        async function assessSearchAndRefineQuery(userQuery, history) {
+            const assessmentModel = genAI.getGenerativeModel({ model: "gemini-2.0-flash-exp" });
+            const formattedHistory = formatHistoryForSearchAssessment(history);
+
+            const assessmentPrompt = `
+You are an expert query analyzer and search strategist. Your task is to:
+1. Determine if a web search is necessary to answer the user's query, considering the conversation history.
+2. If a search is necessary, refine the user's query into an optimal search term that is concise and likely to yield the best results.
+3. If a search is not necessary, indicate that.
+
+Conversation History:
+${formattedHistory}
+
+User's Current Query:
+"${userQuery}"
+
+Output your response as a JSON object with two keys:
+- "searchNeeded": "YES" or "NO"
+- "refinedQuery": If "searchNeeded" is "YES", provide the optimized search query string. If "NO", this can be an empty string or null.
+
+Example for a search needed:
+{
+  "searchNeeded": "YES",
+  "refinedQuery": "latest AI advancements 2024"
+}
+
+Example for no search needed:
+{
+  "searchNeeded": "NO",
+  "refinedQuery": ""
+}
+
+Provide only the JSON object in your response.`;
+
+            let responseText = ""; // Declare responseText outside the try block
+            try {
+                const result = await assessmentModel.generateContent(assessmentPrompt);
+                responseText = result.response.text().trim(); // Assign value inside try
+                
+                // Clean the responseText if it's wrapped in markdown code block
+                if (responseText.startsWith("```json")) {
+                    responseText = responseText.substring(7); // Remove ```json\n
+                    if (responseText.endsWith("```")) {
+                        responseText = responseText.substring(0, responseText.length - 3);
+                    }
+                } else if (responseText.startsWith("```")) { // Handle if it just starts with ```
+                     responseText = responseText.substring(3);
+                     if (responseText.endsWith("```")) {
+                        responseText = responseText.substring(0, responseText.length - 3);
+                    }
+                }
+                responseText = responseText.trim(); // Trim again after potential stripping
+
+                // Attempt to parse the JSON
+                let decision = JSON.parse(responseText);
+                console.log(`Search assessment AI: User Query "${userQuery}", AI Decision:`, decision);
+                return decision;
+            } catch (error) {
+                console.error("Error in assessSearchAndRefineQuery AI call or JSON parsing:", error, "Raw response:", responseText); // Log the (potentially cleaned) responseText
+                // Fallback if JSON parsing fails or other error
+                return { searchNeeded: "NO", refinedQuery: "" }; 
+            }
+        }
+
+        // STEP 1: AI assesses search necessity and refines query
+        let searchDecision = { searchNeeded: "NO", refinedQuery: "" };
+        if (userMessage) { // Only consider searching if there's a user message
+             searchDecision = await assessSearchAndRefineQuery(userMessage, actualHistoryForAPI);
+        }
+
+        // STEP 2: Conditionally perform search with the refined query
+        let webSearchResultsText = "";
+        if (searchDecision.searchNeeded === "YES" && searchDecision.refinedQuery) {
+            console.log(`Performing web search with refined query: "${searchDecision.refinedQuery}" (Original: "${userMessage}")`);
+            const searchResults = await searchService.fetchSearchResults(searchDecision.refinedQuery, 3); // Get top 3 results
+            if (searchResults && searchResults.length > 0) {
+                webSearchResultsText = "\n\n## Recent Web Search Snippets (for context):\n";
+                searchResults.forEach((result, index) => {
+                    webSearchResultsText += `${index + 1}. Title: ${result.title}\n   Snippet: ${result.snippet}\n   Link: ${result.link}\n`;
+                });
+            } else {
+                console.log(`Web search performed with refined query "${searchDecision.refinedQuery}", but no results found.`);
+            }
+        } else {
+            console.log(`Skipping web search for: "${userMessage}" based on AI decision or empty/no refined query.`);
+        }
+
+        // 4. Prepare messages for Gemini (Synthesis AI)
+        const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash-exp" });
 
         const systemInstructionContent = {
             parts: [{ text: SYSTEM_CONTEXT }],
@@ -828,10 +1054,44 @@ client.on('messageCreate', async message => {
         // Append actual conversation history
         contentsForGemini = contentsForGemini.concat(actualHistoryForAPI);
         
-        // Append the current user message
+        // Add web search results and a directive to use them, or a note if search yielded nothing
+        if (searchDecision.searchNeeded === "YES") {
+            if (webSearchResultsText) {
+                const searchDirective = `IMPORTANT: You have successfully performed a web search and found the following snippets regarding the user's query. Synthesize this information to directly answer the user. When you respond, clearly state that you are providing information based on the search results *you* obtained. For example, use phrases like "According to my search results..." or "I found that..." or "My search indicates...". Prioritize information from these snippets.\n\nWeb Search Snippets:\n${webSearchResultsText}\n\nNow, using these search results, please respond to the user's upcoming message:`;
+                contentsForGemini.push({
+                    role: "user", // This is a system-like instruction to guide the AI for the next user message
+                    parts: [{ text: searchDirective }]
+                });
+                contentsForGemini.push({
+                    role: "model", // AI acknowledges the directive and search results
+                    parts: [{ text: "Understood. I have new search results. I will synthesize them and present the findings as my own, clearly stating they come from my search." }]
+                });
+            } else {
+                // Search was attempted but found nothing
+                const noResultsDirective = `IMPORTANT: You attempted a web search for the user regarding their upcoming message (using the refined query: "${searchDecision.refinedQuery}"), but no relevant snippets were found. Inform the user that *your* search was conducted but didn't yield specific results for their query. Then, answer based on your general knowledge if possible, or state that the information could not be retrieved by your search.\n\nNow, please respond to the user's upcoming message, informing them of the unsuccessful search attempt:`;
+                contentsForGemini.push({
+                    role: "user", // This is a system-like instruction
+                    parts: [{ text: noResultsDirective }]
+                });
+                contentsForGemini.push({
+                    role: "model", // AI acknowledges
+                    parts: [{ text: "Okay, I understand. My web search attempt found no specific results. I will inform the user of this and then proceed to answer their query based on my general knowledge if appropriate." }]
+                });
+            }
+        }
+        
+        // Append the current user message with images if present
+        const currentUserParts = [{ text: userMessage }];
+        
+        // Add images to the message parts if any are present
+        if (hasImages) {
+            currentUserParts.push(...messageImages);
+            console.log(`Added ${messageImages.length} image(s) to Gemini API request`);
+        }
+        
         contentsForGemini.push({
             role: "user",
-            parts: [{ text: userMessage }]
+            parts: currentUserParts
         });
         
         // 5. Generate response
@@ -914,6 +1174,124 @@ client.on('messageCreate', async message => {
     }
 });
 
+// Handle message updates (edits) for malware URL scanning
+client.on('messageUpdate', async (oldMessage, newMessage) => {
+    // Only process if the message author is not a bot and content actually changed
+    if (newMessage.author.bot || oldMessage.content === newMessage.content) return;
+    
+    // --- URL Malware Scanning Function for Edited Messages ---
+    async function scanMessageForMalwareUrls(message, isEdit = false) {
+        const BLACKLISTED_DOMAINS_PATTERNS = [
+            // Common trusted domains
+            'youtube.com', 'youtu.be',
+            'spotify.com',
+            'twitter.com', 'x.com',
+            'facebook.com', 'fb.com',
+            'instagram.com',
+            'reddit.com', 'redd.it',
+            'twitch.tv',
+            'debuggers.lk',
+            'tiktok.com',
+            'discord.com', 'discord.gg', // Main Discord domains
+            'tenor.com', // Common GIF provider
+            'giphy.com', // Common GIF provider
+            'imgur.com', // Common image/GIF host
+            // Discord specific CDN/media URLs (these might need refinement)
+            'cdn.discordapp.com/emojis/',
+            'cdn.discordapp.com/attachments/',
+            'media.discordapp.net/attachments/',
+            'cdn.discordapp.com/stickers/',
+            'cdn.discordapp.com/avatars/',
+            'cdn.discordapp.com/icons/',
+            // Other common/safe domains you might want to add
+            'github.com',
+            'google.com',
+            'wikipedia.org',
+            'stackoverflow.com',
+            'developer.mozilla.org',
+        ];
+
+        // Improved URL regex to handle URLs embedded in text better
+        // This regex handles URLs with various punctuation and formatting
+        const urlRegex = /(https?:\/\/(?:[-\w.])+(?:\:[0-9]+)?(?:\/(?:[\w\/_.])*)?(?:\?(?:[\w&=%.])*)?(?:\#(?:[\w.])*)?)/gi;
+        let urlsFound = message.content.match(urlRegex);
+
+        if (urlsFound) {
+            // Clean URLs by removing trailing punctuation that might not be part of the URL
+            urlsFound = urlsFound.map(url => {
+                // Remove trailing punctuation that's commonly not part of URLs
+                return url.replace(/[.,;:!?)\]}]+$/, '');
+            });
+
+            // Filter out blacklisted URLs before scanning
+            urlsFound = urlsFound.filter(url => {
+                try {
+                    const parsedUrl = new URL(url);
+                    const domain = parsedUrl.hostname.startsWith('www.') ? parsedUrl.hostname.substring(4) : parsedUrl.hostname;
+                    
+                    // Check against domain patterns and full URL patterns for things like CDN paths
+                    return !BLACKLISTED_DOMAINS_PATTERNS.some(pattern => {
+                        if (url.includes(pattern)) return true; // For path-based patterns like cdn.discordapp.com/emojis/
+                        if (domain.endsWith(pattern)) return true; // For domain-based patterns like youtube.com
+                        return false;
+                    });
+                } catch (e) {
+                    // Invalid URL, won't be scanned anyway by checkUrlMalware, but good to filter here
+                    console.warn(`Could not parse URL for blacklist check: ${url}`, e.message);
+                    return false;
+                }
+            });
+
+            if (urlsFound.length > 0) {
+                console.log(`URLs to scan after blacklist filtering ${isEdit ? '(from edited message)' : ''}:`, urlsFound);
+            }
+
+            for (const url of urlsFound) {
+                // Run scan in background, don't await here to avoid blocking message processing
+                checkUrlMalware(url).then(status => {
+                    if (status === 'malicious') {
+                        // Delete edited URLs with malicious count > 0 (confirmed malware)
+                        message.delete().then(() => {
+                            const spicyEditMessages = [
+                                `🚨 Whoa, {user}! You just edited in a sketchy link that's giving me major bad vibes! 💀 I had to yeet that edited message into the digital void for everyone's safety! 🔥✨`,
+                                `❌ Hold up, {user}! That edited link was looking sus as heck! 😤 I deleted it faster than you can say "edited malware"! Let's keep this place safe and sound! 💪🛡️`,
+                                `🚫 Nuh-uh, {user}! That link you edited in was screaming danger! 🔥 I sent that edited message straight to digital jail where it belongs! 😘💥`,
+                                `⚠️ Stop right there, {user}! That edited URL was nasty business! 🤢 I deleted it because I care about keeping everyone safe! Next time, maybe scan your links first? 💖🔒`,
+                                `🛑 Hey {user}! That link you just edited in was bad news bears! 🐻💀 I obliterated that edited message for the safety of the server! ✨🛡️`
+                            ];
+                            
+                            const randomMessage = spicyEditMessages[Math.floor(Math.random() * spicyEditMessages.length)];
+                            const personalizedMessage = replaceUserPlaceholders(randomMessage, message.member || message.author);
+                            
+                            message.channel.send(personalizedMessage).catch(err => console.error("Error sending edited malware deletion message:", err));
+                        }).catch(err => {
+                            console.error("Error deleting edited malware message:", err);
+                            // If we can't delete, send a warning instead
+                            const fallbackMessage = replaceUserPlaceholders(`🚨 Hey {user}! That edited link you shared is potentially malicious! I couldn't delete it, but please remove it ASAP for everyone's safety! 💀🔥`, message.member || message.author);
+                            message.reply({
+                                content: fallbackMessage,
+                                allowedMentions: { repliedUser: false }
+                            }).catch(err => console.error("Error sending fallback edited malware warning:", err));
+                        });
+                    } else if (status === 'suspicious') {
+                        // Add warning emoji for edited URLs with suspicious count > 0 but malicious count = 0
+                        message.react('⚠️').catch(err => console.error("Error reacting with warning emoji:", err));
+                    } else if (status === 'safe') {
+                        // Add checkmark for edited URLs with 0 malicious and 0 suspicious counts
+                        message.react('✅').catch(err => console.error("Error reacting with verified tick:", err));
+                    }
+                    // If status is 'unknown' or 'error', do nothing as per requirements
+                }).catch(err => {
+                    console.error(`Error during malware check for ${url}:`, err);
+                });
+            }
+        }
+    }
+
+    // Scan the edited message for malware URLs
+    await scanMessageForMalwareUrls(newMessage, true);
+});
+
 // Handle slash commands
 client.on('interactionCreate', async interaction => {
     if (!interaction.isCommand()) return;
@@ -957,7 +1335,7 @@ client.on('interactionCreate', async interaction => {
             .addFields(
                 { 
                     name: '💬 How to Chat With Me', 
-                    value: 'Just mention me (@Poppy) or reply to one of my messages to start a conversation! I remember our chat context and your preferences between conversations.'
+                    value: 'Just mention me (@Poppy) or reply to one of my messages to start a conversation! I remember our chat context and your preferences between conversations. I can also see and analyze images you share!'
                 },
                 {
                     name: '🛡️ Automatic URL Scanning',
@@ -969,7 +1347,7 @@ client.on('interactionCreate', async interaction => {
                 },
                 {
                     name: '🛠️ Utility Commands',
-                    value: '`!surl <url>` - Shortens a long URL.\n`!myurls` - Shows your shortened URLs.\n`!anime [category] [options]` - ✨ Summons cute anime pictures! Try `!anime catgirl` or `!anime random +wink`.'
+                    value: '`!surl <url>` - Shortens a long URL.\n`!myurls` - Shows your shortened URLs.\n`.anime [category] [options]` - ✨ Summons cute anime pictures! Try `.anime catgirl` or `.anime random +wink`.'
                 },
                 { 
                     name: '🤖 What I Can Help With', 
@@ -1029,7 +1407,7 @@ client.on('interactionCreate', async interaction => {
 **UTILITY COMMANDS:**
 - !surl <url> - Shortens a long URL.
 - !myurls - Shows your shortened URLs.
-- !anime [category] [options] - ✨ Summons cute anime pictures! Try \`!anime catgirl\` or \`!anime random +wink\`.
+- .anime [category] [options] - ✨ Summons cute anime pictures! Try \`.anime catgirl\` or \`.anime random +wink\`.
 
 **WHAT I CAN HELP WITH:**
 • Answer questions and have fun chats
@@ -1159,9 +1537,10 @@ Need more help? Just ask! 💖
         };
         
         // Create stats embed
+        const displayName = interaction.member?.nickname || interaction.user.displayName || interaction.user.username;
         const statsEmbed = new EmbedBuilder()
             .setColor(0xFF69B4)
-            .setTitle(`${interaction.user.username}'s Stats`)
+            .setTitle(`${displayName}'s Stats`)
             .addFields(
                 {
                     name: 'Total Messages',
@@ -1422,7 +1801,8 @@ Need more help? Just ask! 💖
             }
 
             if (milliseconds > 0) {
-                interaction.reply({ content: `Okay, ${interaction.user.username}! I'll remind you to "${task}" in ${timeInput}.`, ephemeral: true });
+                const displayName = interaction.member?.nickname || interaction.user.displayName || interaction.user.username;
+                interaction.reply({ content: `Okay, ${displayName}! I'll remind you to "${task}" in ${timeInput}.`, ephemeral: true });
                 
                 setTimeout(() => {
                     interaction.user.send(`🔔 Reminder: ${task}`)
@@ -1447,7 +1827,8 @@ Need more help? Just ask! 💖
         }
 
         const milliseconds = minutes * 60 * 1000;
-        interaction.reply({ content: `Okay, ${interaction.user.username}! Timer set for ${minutes} minute(s). I'll let you know when it's up!`, ephemeral: false });
+        const displayName = interaction.member?.nickname || interaction.user.displayName || interaction.user.username;
+        interaction.reply({ content: `Okay, ${displayName}! Timer set for ${minutes} minute(s). I'll let you know when it's up!`, ephemeral: false });
 
         setTimeout(() => {
             interaction.channel.send(`⏰ <@${interaction.user.id}>, your ${minutes} minute timer is up!`)
@@ -1548,7 +1929,7 @@ Need more help? Just ask! 💖
                         { name: 'Original URL', value: `\`${longUrl}\`` },
                         { name: 'Shortened URL', value: `[${shortUrl}](${shortUrl})` }
                     )
-                    .setFooter({ text: 'Powered by 1pt.co' })
+
                     .setTimestamp();
                 
                 if (response.data.message === "Added!" && response.data.receivedRequestedShort === false && shortCode) {
@@ -1599,4 +1980,33 @@ client.on('interactionCreate', async interaction => {
     }
 });
 
-client.login(process.env.DISCORD_TOKEN);
+// Process error handlers for proper restart functionality
+process.on('uncaughtException', (error) => {
+    console.error('Uncaught Exception:', error);
+    console.log('Bot will restart due to uncaught exception...');
+    process.exit(1); // Exit with error code to trigger restart
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+    console.log('Bot will restart due to unhandled rejection...');
+    process.exit(1); // Exit with error code to trigger restart
+});
+
+// Graceful shutdown handler
+process.on('SIGINT', () => {
+    console.log('Received SIGINT. Graceful shutdown...');
+    client.destroy();
+    process.exit(0);
+});
+
+process.on('SIGTERM', () => {
+    console.log('Received SIGTERM. Graceful shutdown...');
+    client.destroy();
+    process.exit(0);
+});
+
+client.login(process.env.DISCORD_TOKEN).catch(error => {
+    console.error('Failed to login:', error);
+    process.exit(1); // Exit with error code to trigger restart
+});

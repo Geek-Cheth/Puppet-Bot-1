@@ -110,7 +110,7 @@ async function getUrlscanReport(scanId) {
 /**
  * Checks a URL for malicious content using urlscan.io and VirusTotal as a fallback.
  * @param {string} urlToCheck The URL to check.
- * @returns {Promise<'safe' | 'malicious' | 'unknown' | 'error'>} The status of the URL.
+ * @returns {Promise<{status: 'safe' | 'malicious' | 'suspicious' | 'unknown' | 'error', details?: object}>} The status and details of the URL.
  */
 async function checkUrlMalware(urlToCheck) {
     const cachedResult = await db.getScannedUrl(urlToCheck);
@@ -197,9 +197,16 @@ async function checkUrlMalware(urlToCheck) {
                 virusTotalResponse = report;
                 if (report?.attributes?.status === 'completed') {
                     const stats = report.attributes.stats;
-                    if (stats.malicious > 0 || stats.suspicious > 0) {
+                    // URLs with malicious count > 0 are definitely malicious and should be deleted
+                    if (stats.malicious > 0) {
                         finalCombinedStatus = 'malicious';
-                    } else if (stats.harmless > 0 && stats.malicious === 0 && stats.suspicious === 0) {
+                    } 
+                    // URLs with suspicious count > 0 but no malicious detections get warning emoji
+                    else if (stats.suspicious > 10 && stats.malicious === 0) {
+                        finalCombinedStatus = 'suspicious';
+                    } 
+                    // URLs with 0 malicious and 0 suspicious counts are safe
+                    else if (stats.harmless > 0 && stats.malicious === 0 && stats.suspicious < 10) {
                         finalCombinedStatus = 'safe';
                     } else {
                         finalCombinedStatus = 'unknown';
