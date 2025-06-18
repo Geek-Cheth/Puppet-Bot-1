@@ -198,6 +198,113 @@ const commands = [
     // Removed SlashCommandBuilder for surl as it's now a prefixed command
 ];
 
+// Constants for malware scanning
+const BLACKLISTED_DOMAINS_PATTERNS = [
+    // Common trusted domains
+    'youtube.com', 'youtu.be',
+    'spotify.com',
+    'twitter.com', 'x.com',
+    'facebook.com', 'fb.com',
+    'instagram.com',
+    'reddit.com', 'redd.it',
+    'twitch.tv',
+    'tiktok.com',
+    'discord.com', 'discord.gg', // Main Discord domains
+    'tenor.com', // Common GIF provider
+    'giphy.com', // Common GIF provider
+    'imgur.com', // Common image/GIF host
+    // Discord specific CDN/media URLs (these might need refinement)
+    'cdn.discordapp.com/emojis/',
+    'cdn.discordapp.com/attachments/',
+    'media.discordapp.net/attachments/',
+    'cdn.discordapp.com/stickers/',
+    'cdn.discordapp.com/avatars/',
+    'cdn.discordapp.com/icons/',
+    // Other common/safe domains you might want to add
+    'github.com',
+    'google.com',
+    'wikipedia.org',
+    'stackoverflow.com',
+    'developer.mozilla.org',
+    // Added debuggers.lk as it was in one of the lists but not the other
+    'debuggers.lk',
+];
+
+// Consolidated Malware Scanning Function
+async function handleMalwareScan(message, isEdit = false) {
+    // Improved URL regex to handle URLs embedded in text better
+    const urlRegex = /(https?:\/\/(?:[-\w.])+(?:\:[0-9]+)?(?:\/(?:[\w\/_.])*)?(?:\?(?:[\w&=%.])*)?(?:\#(?:[\w.])*)?)/gi;
+    let urlsFound = message.content.match(urlRegex);
+
+    if (urlsFound) {
+        // Clean URLs by removing trailing punctuation that might not be part of the URL
+        urlsFound = urlsFound.map(url => {
+            return url.replace(/[.,;:!?)\]}]+$/, '');
+        });
+
+        // Filter out blacklisted URLs before scanning
+        urlsFound = urlsFound.filter(url => {
+            try {
+                const parsedUrl = new URL(url);
+                const domain = parsedUrl.hostname.startsWith('www.') ? parsedUrl.hostname.substring(4) : parsedUrl.hostname;
+
+                return !BLACKLISTED_DOMAINS_PATTERNS.some(pattern => {
+                    if (url.includes(pattern)) return true;
+                    if (domain.endsWith(pattern)) return true;
+                    return false;
+                });
+            } catch (e) {
+                console.warn(`Could not parse URL for blacklist check: ${url}`, e.message);
+                return false;
+            }
+        });
+
+        if (urlsFound.length > 0) {
+            console.log(`URLs to scan after blacklist filtering ${isEdit ? '(from edited message)' : ''}:`, urlsFound);
+        }
+
+        for (const url of urlsFound) {
+            checkUrlMalware(url).then(status => {
+                if (status === 'malicious') {
+                    message.delete().then(() => {
+                        const spicyMessages = isEdit ? [
+                            `🚨 Whoa, {user}! You just edited in a sketchy link that's giving me major bad vibes! 💀 I had to yeet that edited message into the digital void for everyone's safety! 🔥✨`,
+                            `❌ Hold up, {user}! That edited link was looking sus as heck! 😤 I deleted it faster than you can say "edited malware"! Let's keep this place safe and sound! 💪🛡️`,
+                            `🚫 Nuh-uh, {user}! That link you edited in was screaming danger! 🔥 I sent that edited message straight to digital jail where it belongs! 😘💥`,
+                            `⚠️ Stop right there, {user}! That edited URL was nasty business! 🤢 I deleted it because I care about keeping everyone safe! Next time, maybe scan your links first? 💖🔒`,
+                            `🛑 Hey {user}! That link you just edited in was bad news bears! 🐻💀 I obliterated that edited message for the safety of the server! ✨🛡️`
+                        ] : [
+                            `🚨 Whoa there, {user}! That link you just shared is giving me major red flags! 💀 I had to yeet it into the digital void for everyone's safety! Please double-check your links before sharing, babe! 🔥✨`,
+                            `❌ Ooop, {user}! That URL was looking sus as heck! 😤 I deleted it faster than you can say "malware"! Let's keep this place safe and sound, yeah? 💪🛡️`,
+                            `🚫 Hold up, {user}! That link was screaming danger! 🔥 I sent it straight to digital jail where it belongs! Be more careful with those sketchy URLs, hun! 😘💥`,
+                            `⚠️ Nuh-uh, {user}! That link was nasty business! 🤢 I deleted it because I care about keeping everyone safe! Next time, maybe scan your links first? 💖🔒`,
+                            `🛑 Stop right there, {user}! That URL was bad news bears! 🐻💀 I obliterated it for the safety of the server! Please be more cautious with your link game! ✨🛡️`
+                        ];
+
+                        const randomMessage = spicyMessages[Math.floor(Math.random() * spicyMessages.length)];
+                        const personalizedMessage = replaceUserPlaceholders(randomMessage, message.member || message.author);
+
+                        message.channel.send(personalizedMessage).catch(err => console.error(`Error sending ${isEdit ? 'edited ' : ''}malware deletion message:`, err));
+                    }).catch(err => {
+                        console.error(`Error deleting ${isEdit ? 'edited ' : ''}malware message:`, err);
+                        const fallbackMessage = replaceUserPlaceholders(`🚨 Hey {user}! That link you shared ${isEdit ? 'in an edit ' : ''}is potentially malicious! I couldn't delete it, but please remove it ASAP for everyone's safety! 💀🔥`, message.member || message.author);
+                        message.reply({
+                            content: fallbackMessage,
+                            allowedMentions: { repliedUser: false }
+                        }).catch(errReply => console.error(`Error sending fallback ${isEdit ? 'edited ' : ''}malware warning:`, errReply));
+                    });
+                } else if (status === 'suspicious') {
+                    message.react('⚠️').catch(err => console.error("Error reacting with warning emoji:", err));
+                } else if (status === 'safe') {
+                    message.react('✅').catch(err => console.error("Error reacting with verified tick:", err));
+                }
+            }).catch(err => {
+                console.error(`Error during malware check for ${url}:`, err);
+            });
+        }
+    }
+}
+
 // Register slash commands
 const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
 
@@ -235,6 +342,10 @@ const GREETING_COMMANDS = {
   '.gn': {
     folder: 'goodnight',
     message: '🌙 Good Night, {user}! Sweet dreams!'
+  },
+  '.ga': {
+    folder: 'goodafternoon',
+    message: '🌅 Good Afternoon, {user}! Hope you\'re having a wonderful day!'
   }
 };
 
@@ -591,114 +702,8 @@ const COOLDOWN_DURATION = 3000; // 3 seconds between messages
 client.on('messageCreate', async message => {
     if (message.author.bot) return;
 
-    // --- URL Malware Scanning Function ---
-    async function scanMessageForMalwareUrls(message, isEdit = false) {
-        const BLACKLISTED_DOMAINS_PATTERNS = [
-            // Common trusted domains
-            'youtube.com', 'youtu.be',
-            'spotify.com',
-            'twitter.com', 'x.com',
-            'facebook.com', 'fb.com',
-            'instagram.com',
-            'reddit.com', 'redd.it',
-            'twitch.tv',
-            'tiktok.com',
-            'discord.com', 'discord.gg', // Main Discord domains
-            'tenor.com', // Common GIF provider
-            'giphy.com', // Common GIF provider
-            'imgur.com', // Common image/GIF host
-            // Discord specific CDN/media URLs (these might need refinement)
-            'cdn.discordapp.com/emojis/',
-            'cdn.discordapp.com/attachments/',
-            'media.discordapp.net/attachments/',
-            'cdn.discordapp.com/stickers/',
-            // Other common/safe domains you might want to add
-            'github.com',
-            'google.com',
-            'wikipedia.org',
-            'stackoverflow.com',
-            'developer.mozilla.org',
-        ];
-
-        // Improved URL regex to handle URLs embedded in text better
-        // This regex handles URLs with various punctuation and formatting
-        const urlRegex = /(https?:\/\/(?:[-\w.])+(?:\:[0-9]+)?(?:\/(?:[\w\/_.])*)?(?:\?(?:[\w&=%.])*)?(?:\#(?:[\w.])*)?)/gi;
-        let urlsFound = message.content.match(urlRegex);
-
-        if (urlsFound) {
-            // Clean URLs by removing trailing punctuation that might not be part of the URL
-            urlsFound = urlsFound.map(url => {
-                // Remove trailing punctuation that's commonly not part of URLs
-                return url.replace(/[.,;:!?)\]}]+$/, '');
-            });
-
-            // Filter out blacklisted URLs before scanning
-            urlsFound = urlsFound.filter(url => {
-                try {
-                    const parsedUrl = new URL(url);
-                    const domain = parsedUrl.hostname.startsWith('www.') ? parsedUrl.hostname.substring(4) : parsedUrl.hostname;
-                    
-                    // Check against domain patterns and full URL patterns for things like CDN paths
-                    return !BLACKLISTED_DOMAINS_PATTERNS.some(pattern => {
-                        if (url.includes(pattern)) return true; // For path-based patterns like cdn.discordapp.com/emojis/
-                        if (domain.endsWith(pattern)) return true; // For domain-based patterns like youtube.com
-                        return false;
-                    });
-                } catch (e) {
-                    // Invalid URL, won't be scanned anyway by checkUrlMalware, but good to filter here
-                    console.warn(`Could not parse URL for blacklist check: ${url}`, e.message);
-                    return false;
-                }
-            });
-
-            if (urlsFound.length > 0) {
-                console.log(`URLs to scan after blacklist filtering ${isEdit ? '(from edited message)' : ''}:`, urlsFound);
-            }
-
-            for (const url of urlsFound) {
-                // Run scan in background, don't await here to avoid blocking message processing
-                checkUrlMalware(url).then(status => {
-                    if (status === 'malicious') {
-                        // Delete URLs with malicious count > 0 (confirmed malware)
-                        message.delete().then(() => {
-                            const spicyMessages = [
-                                `🚨 Whoa there, {user}! That link you just shared is giving me major red flags! 💀 I had to yeet it into the digital void for everyone's safety! Please double-check your links before sharing, babe! 🔥✨`,
-                                `❌ Ooop, {user}! That URL was looking sus as heck! 😤 I deleted it faster than you can say "malware"! Let's keep this place safe and sound, yeah? 💪🛡️`,
-                                `🚫 Hold up, {user}! That link was screaming danger! 🔥 I sent it straight to digital jail where it belongs! Be more careful with those sketchy URLs, hun! 😘💥`,
-                                `⚠️ Nuh-uh, {user}! That link was nasty business! 🤢 I deleted it because I care about keeping everyone safe! Next time, maybe scan your links first? 💖🔒`,
-                                `🛑 Stop right there, {user}! That URL was bad news bears! 🐻💀 I obliterated it for the safety of the server! Please be more cautious with your link game! ✨🛡️`
-                            ];
-                            
-                            const randomMessage = spicyMessages[Math.floor(Math.random() * spicyMessages.length)];
-                            const personalizedMessage = replaceUserPlaceholders(randomMessage, message.member || message.author);
-                            
-                            message.channel.send(personalizedMessage).catch(err => console.error("Error sending malware deletion message:", err));
-                        }).catch(err => {
-                            console.error("Error deleting malware message:", err);
-                            // If we can't delete, send a warning instead
-                            const fallbackMessage = replaceUserPlaceholders(`🚨 Hey {user}! That link you shared is potentially malicious! I couldn't delete it, but please remove it ASAP for everyone's safety! 💀🔥`, message.member || message.author);
-                            message.reply({
-                                content: fallbackMessage,
-                                allowedMentions: { repliedUser: false }
-                            }).catch(err => console.error("Error sending fallback malware warning:", err));
-                        });
-                    } else if (status === 'suspicious') {
-                        // Add warning emoji for URLs with suspicious count > 0 but malicious count = 0
-                        message.react('⚠️').catch(err => console.error("Error reacting with warning emoji:", err));
-                    } else if (status === 'safe') {
-                        // Add checkmark for URLs with 0 malicious and 0 suspicious counts
-                        message.react('✅').catch(err => console.error("Error reacting with verified tick:", err));
-                    }
-                    // If status is 'unknown' or 'error', do nothing as per requirements
-                }).catch(err => {
-                    console.error(`Error during malware check for ${url}:`, err);
-                });
-            }
-        }
-    }
-
-    // Scan the message for malware URLs
-    await scanMessageForMalwareUrls(message, false);
+    // Scan the message for malware URLs using the consolidated function
+    await handleMalwareScan(message, false);
 
     // Check if the message is a greeting command
     const messageContent = message.content.trim(); // Keep original case for command prefix
@@ -1179,117 +1184,8 @@ client.on('messageUpdate', async (oldMessage, newMessage) => {
     // Only process if the message author is not a bot and content actually changed
     if (newMessage.author.bot || oldMessage.content === newMessage.content) return;
     
-    // --- URL Malware Scanning Function for Edited Messages ---
-    async function scanMessageForMalwareUrls(message, isEdit = false) {
-        const BLACKLISTED_DOMAINS_PATTERNS = [
-            // Common trusted domains
-            'youtube.com', 'youtu.be',
-            'spotify.com',
-            'twitter.com', 'x.com',
-            'facebook.com', 'fb.com',
-            'instagram.com',
-            'reddit.com', 'redd.it',
-            'twitch.tv',
-            'debuggers.lk',
-            'tiktok.com',
-            'discord.com', 'discord.gg', // Main Discord domains
-            'tenor.com', // Common GIF provider
-            'giphy.com', // Common GIF provider
-            'imgur.com', // Common image/GIF host
-            // Discord specific CDN/media URLs (these might need refinement)
-            'cdn.discordapp.com/emojis/',
-            'cdn.discordapp.com/attachments/',
-            'media.discordapp.net/attachments/',
-            'cdn.discordapp.com/stickers/',
-            'cdn.discordapp.com/avatars/',
-            'cdn.discordapp.com/icons/',
-            // Other common/safe domains you might want to add
-            'github.com',
-            'google.com',
-            'wikipedia.org',
-            'stackoverflow.com',
-            'developer.mozilla.org',
-        ];
-
-        // Improved URL regex to handle URLs embedded in text better
-        // This regex handles URLs with various punctuation and formatting
-        const urlRegex = /(https?:\/\/(?:[-\w.])+(?:\:[0-9]+)?(?:\/(?:[\w\/_.])*)?(?:\?(?:[\w&=%.])*)?(?:\#(?:[\w.])*)?)/gi;
-        let urlsFound = message.content.match(urlRegex);
-
-        if (urlsFound) {
-            // Clean URLs by removing trailing punctuation that might not be part of the URL
-            urlsFound = urlsFound.map(url => {
-                // Remove trailing punctuation that's commonly not part of URLs
-                return url.replace(/[.,;:!?)\]}]+$/, '');
-            });
-
-            // Filter out blacklisted URLs before scanning
-            urlsFound = urlsFound.filter(url => {
-                try {
-                    const parsedUrl = new URL(url);
-                    const domain = parsedUrl.hostname.startsWith('www.') ? parsedUrl.hostname.substring(4) : parsedUrl.hostname;
-                    
-                    // Check against domain patterns and full URL patterns for things like CDN paths
-                    return !BLACKLISTED_DOMAINS_PATTERNS.some(pattern => {
-                        if (url.includes(pattern)) return true; // For path-based patterns like cdn.discordapp.com/emojis/
-                        if (domain.endsWith(pattern)) return true; // For domain-based patterns like youtube.com
-                        return false;
-                    });
-                } catch (e) {
-                    // Invalid URL, won't be scanned anyway by checkUrlMalware, but good to filter here
-                    console.warn(`Could not parse URL for blacklist check: ${url}`, e.message);
-                    return false;
-                }
-            });
-
-            if (urlsFound.length > 0) {
-                console.log(`URLs to scan after blacklist filtering ${isEdit ? '(from edited message)' : ''}:`, urlsFound);
-            }
-
-            for (const url of urlsFound) {
-                // Run scan in background, don't await here to avoid blocking message processing
-                checkUrlMalware(url).then(status => {
-                    if (status === 'malicious') {
-                        // Delete edited URLs with malicious count > 0 (confirmed malware)
-                        message.delete().then(() => {
-                            const spicyEditMessages = [
-                                `🚨 Whoa, {user}! You just edited in a sketchy link that's giving me major bad vibes! 💀 I had to yeet that edited message into the digital void for everyone's safety! 🔥✨`,
-                                `❌ Hold up, {user}! That edited link was looking sus as heck! 😤 I deleted it faster than you can say "edited malware"! Let's keep this place safe and sound! 💪🛡️`,
-                                `🚫 Nuh-uh, {user}! That link you edited in was screaming danger! 🔥 I sent that edited message straight to digital jail where it belongs! 😘💥`,
-                                `⚠️ Stop right there, {user}! That edited URL was nasty business! 🤢 I deleted it because I care about keeping everyone safe! Next time, maybe scan your links first? 💖🔒`,
-                                `🛑 Hey {user}! That link you just edited in was bad news bears! 🐻💀 I obliterated that edited message for the safety of the server! ✨🛡️`
-                            ];
-                            
-                            const randomMessage = spicyEditMessages[Math.floor(Math.random() * spicyEditMessages.length)];
-                            const personalizedMessage = replaceUserPlaceholders(randomMessage, message.member || message.author);
-                            
-                            message.channel.send(personalizedMessage).catch(err => console.error("Error sending edited malware deletion message:", err));
-                        }).catch(err => {
-                            console.error("Error deleting edited malware message:", err);
-                            // If we can't delete, send a warning instead
-                            const fallbackMessage = replaceUserPlaceholders(`🚨 Hey {user}! That edited link you shared is potentially malicious! I couldn't delete it, but please remove it ASAP for everyone's safety! 💀🔥`, message.member || message.author);
-                            message.reply({
-                                content: fallbackMessage,
-                                allowedMentions: { repliedUser: false }
-                            }).catch(err => console.error("Error sending fallback edited malware warning:", err));
-                        });
-                    } else if (status === 'suspicious') {
-                        // Add warning emoji for edited URLs with suspicious count > 0 but malicious count = 0
-                        message.react('⚠️').catch(err => console.error("Error reacting with warning emoji:", err));
-                    } else if (status === 'safe') {
-                        // Add checkmark for edited URLs with 0 malicious and 0 suspicious counts
-                        message.react('✅').catch(err => console.error("Error reacting with verified tick:", err));
-                    }
-                    // If status is 'unknown' or 'error', do nothing as per requirements
-                }).catch(err => {
-                    console.error(`Error during malware check for ${url}:`, err);
-                });
-            }
-        }
-    }
-
-    // Scan the edited message for malware URLs
-    await scanMessageForMalwareUrls(newMessage, true);
+    // Scan the edited message for malware URLs using the consolidated function
+    await handleMalwareScan(newMessage, true);
 });
 
 // Handle slash commands
@@ -1903,54 +1799,6 @@ Need more help? Just ask! 💖
         }
     }
 
-    // URL Shortener command
-    else if (commandName === 'surl') {
-        const longUrl = interaction.options.getString('long_url');
-        const shortCode = interaction.options.getString('short_code'); // Can be null
-
-        try {
-            await interaction.deferReply({ ephemeral: true }); // Defer reply as API call might take time
-
-            const apiUrl = 'http://csclub.uwaterloo.ca/~phthakka/1pt-express/addURL';
-            const payload = { long: longUrl };
-            if (shortCode) {
-                payload.short = shortCode;
-            }
-
-            const response = await axios.post(apiUrl, payload);
-
-            if (response.data && response.data.short) {
-                const shortUrl = `https://1pt.co/${response.data.short}`;
-                const embed = new EmbedBuilder()
-                    .setColor(0x5865F2) // Discord blurple
-                    .setTitle('🔗 URL Shortened!')
-                    .setDescription(`Your long URL has been successfully shortened.`)
-                    .addFields(
-                        { name: 'Original URL', value: `\`${longUrl}\`` },
-                        { name: 'Shortened URL', value: `[${shortUrl}](${shortUrl})` }
-                    )
-
-                    .setTimestamp();
-                
-                if (response.data.message === "Added!" && response.data.receivedRequestedShort === false && shortCode) {
-                    embed.addFields({ name: 'Note', value: `The custom short code \`${shortCode}\` was taken, so a random one was generated.`});
-                }
-
-                await interaction.editReply({ embeds: [embed], ephemeral: false });
-            } else {
-                await interaction.editReply({ content: 'Sorry, I received an unexpected response from the URL shortening service. Please try again later.', ephemeral: true });
-            }
-        } catch (error) {
-            console.error('Error shortening URL:', error.response ? error.response.data : error.message);
-            let errorMessage = 'Oops! Something went wrong while trying to shorten the URL. ';
-            if (error.response && error.response.data && error.response.data.message) {
-                errorMessage += `Service said: "${error.response.data.message}"`;
-            } else {
-                errorMessage += 'Please try again later.';
-            }
-            await interaction.editReply({ content: errorMessage, ephemeral: true });
-        }
-    }
     // Removed the SURL slash command handler as it's now a prefixed command.
 });
 

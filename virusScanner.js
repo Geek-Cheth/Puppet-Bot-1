@@ -4,7 +4,7 @@ const db = require('./database'); // Import database functions
 
 const VIRUSTOTAL_API_KEY = process.env.VIRUSTOTAL_KEY;
 const URLSCAN_API_KEY = process.env.URLSCAN_API_KEY || '0196f7c1-71f0-74b3-a3a2-1fc8f5f09716'; // Fallback for local dev if not in .env
-const CACHE_DURATION_HOURS = 24; // Cache results for 24 hours
+const CACHE_DURATION_HOURS = 2160; // Cache results for 2160 hours (90 days)
 
 const VIRUSTOTAL_API_URL_SCAN = 'https://www.virustotal.com/api/v3/urls';
 const VIRUSTOTAL_API_URL_REPORT = 'https://www.virustotal.com/api/v3/analyses/';
