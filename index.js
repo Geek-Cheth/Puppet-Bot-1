@@ -25,6 +25,7 @@ const db = require('./database');
 // const axios = require('axios'); 
 const { handleShortenUrlCommand, handleMyUrlsCommand } = require('./surl');
 const { checkUrlMalware } = require('./virusScanner');
+const { isChannelActive, setChannelActivation } = require('./database');
 const animeCommand = require('./anime');
 const { adminCommands } = require('./commands/admin');
 const { adminSlashCommands } = require('./commands/adminCommands');
@@ -195,6 +196,17 @@ const commands = [
                         .setRequired(true)
                 )
         ),
+    
+    new SlashCommandBuilder()
+        .setName('activate')
+        .setDescription('Activate or deactivate the bot in this channel')
+        .setDefaultMemberPermissions(PermissionFlagsBits.ManageChannels)
+        .addBooleanOption(option =>
+            option
+                .setName('enabled')
+                .setDescription('Enable or disable bot responses in this channel')
+                .setRequired(true)
+        ),
     // Removed SlashCommandBuilder for surl as it's now a prefixed command
 ];
 
@@ -203,10 +215,10 @@ const BLACKLISTED_DOMAINS_PATTERNS = [
     // Common trusted domains
     'youtube.com', 'youtu.be',
     'spotify.com',
-    'twitter.com', 'x.com',
+    'twitter.com', 'x.com', 'fxtwitter.com',
     'facebook.com', 'fb.com',
     'instagram.com',
-    'reddit.com', 'redd.it',
+    'reddit.com', 'redd.it', 'rxddit.com',
     'twitch.tv',
     'tiktok.com',
     'discord.com', 'discord.gg', // Main Discord domains
@@ -806,6 +818,15 @@ client.on('messageCreate', async message => {
     // If not a custom command, proceed with AI chat logic if mentioned or replied to
     if (!(isMentioned || isReplyToBot)) return;
 
+    // Check if the channel is activated for bot responses (only for guild channels)
+    if (message.guild) {
+        const channelActive = await isChannelActive(message.guild.id, message.channel.id);
+        if (!channelActive) {
+            console.log(`Channel ${message.channel.name} (${message.channel.id}) in guild ${message.guild.name} is not activated. Skipping AI response.`);
+            return; // Don't respond if channel is not activated
+        }
+    }
+
     // Extract actual message content after mention if present
     let userMessage = message.content;
     if (isMentioned) {
@@ -1251,7 +1272,7 @@ client.on('interactionCreate', async interaction => {
                 },
                 {
                     name: '📝 Slash Commands',
-                    value: '`/help` - Shows this help information\n`/profile` - View and edit your user profile\n`/stats` - View your conversation statistics\n`/command` - Create and manage custom commands\n`/memory` - Manage conversation history\n`/settings` - Server configuration (admin only)\n`/remind [task] in [time]` - Set a reminder\n`/timer [minutes]` - Starts a countdown timer\n`/ping` - Bot status check'
+                    value: '`/help` - Shows this help information\n`/profile` - View and edit your user profile\n`/stats` - View your conversation statistics\n`/command` - Create and manage custom commands\n`/memory` - Manage conversation history\n`/settings` - Server configuration (admin only)\n`/activate` - Enable/disable bot responses in this channel (admin only)\n`/remind [task] in [time]` - Set a reminder\n`/timer [minutes]` - Starts a countdown timer\n`/ping` - Bot status check'
                 },
                 {
                     name: '🛡️ Admin Commands (Admin Only)',
@@ -1797,6 +1818,50 @@ Need more help? Just ask! 💖
                 ephemeral: false
             });
         }
+    }
+    
+    // Activate command - channel activation management
+    else if (commandName === 'activate') {
+        // Check if user has manage channels permission
+        if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageChannels)) {
+            return interaction.reply({
+                content: "You need the 'Manage Channels' permission to activate/deactivate the bot in channels.",
+                ephemeral: true
+            });
+        }
+        
+        const guildId = interaction.guild?.id;
+        const channelId = interaction.channelId;
+        const enabled = interaction.options.getBoolean('enabled');
+        
+        if (!guildId) {
+            return interaction.reply({
+                content: "This command can only be used in a server.",
+                ephemeral: true
+            });
+        }
+        
+        // Set channel activation status
+        const result = await setChannelActivation(guildId, channelId, enabled, interaction.user.id);
+        
+        if (!result) {
+            return interaction.reply({
+                content: "❌ Failed to update channel activation status. Please try again.",
+                ephemeral: true
+            });
+        }
+        
+        const statusText = enabled ? "✅ activated" : "❌ deactivated";
+        const actionText = enabled 
+            ? "I will now respond to messages when mentioned or replied to in this channel!" 
+            : "I will no longer respond to messages in this channel, even when mentioned.";
+        
+        await interaction.reply({
+            content: `🤖 Bot has been ${statusText} in <#${channelId}>!\n\n${actionText}`,
+            ephemeral: false
+        });
+        
+        console.log(`Channel activation ${enabled ? 'enabled' : 'disabled'} in ${interaction.channel.name} (${channelId}) by ${interaction.user.username} (${interaction.user.id})`);
     }
 
     // Removed the SURL slash command handler as it's now a prefixed command.

@@ -749,6 +749,70 @@ async function getUserShortenedUrls(discordId, limit = 10, offset = 0) {
     return data;
 }
 
+// --- Channel Activation Functions ---
+
+/**
+ * Set channel activation status
+ * @param {string} guildId The guild ID
+ * @param {string} channelId The channel ID
+ * @param {boolean} isActive Whether the channel should be active
+ * @param {string} activatedBy Discord ID of the user who changed the status
+ * @returns {Promise<object|null>} The activation record or null on error
+ */
+async function setChannelActivation(guildId, channelId, isActive, activatedBy) {
+    const { data, error } = await supabase
+        .from('channel_activations')
+        .upsert({
+            guild_id: guildId,
+            channel_id: channelId,
+            is_active: isActive,
+            activated_by: activatedBy,
+            activated_at: new Date()
+        }, {
+            onConflict: 'guild_id,channel_id'
+        })
+        .select()
+        .single();
+
+    if (error) {
+        console.error('Error setting channel activation:', error);
+        return null;
+    }
+    return data;
+}
+
+/**
+ * Get channel activation status
+ * @param {string} guildId The guild ID
+ * @param {string} channelId The channel ID
+ * @returns {Promise<object|null>} The activation record or null if not found/error
+ */
+async function getChannelActivation(guildId, channelId) {
+    const { data, error } = await supabase
+        .from('channel_activations')
+        .select('*')
+        .eq('guild_id', guildId)
+        .eq('channel_id', channelId)
+        .single();
+
+    if (error && error.code !== 'PGRST116') { // PGRST116 is "not found"
+        console.error('Error fetching channel activation:', error);
+        return null;
+    }
+    return data;
+}
+
+/**
+ * Check if a channel is active (bot will respond in this channel)
+ * @param {string} guildId The guild ID
+ * @param {string} channelId The channel ID
+ * @returns {Promise<boolean>} True if active, false if inactive or not found
+ */
+async function isChannelActive(guildId, channelId) {
+    const activation = await getChannelActivation(guildId, channelId);
+    return activation ? activation.is_active : false;
+}
+
 module.exports = {
     getUser,
     createOrUpdateUser,
@@ -772,5 +836,8 @@ module.exports = {
     addWarning,
     getWarnings,
     clearWarnings,
-    removeWarning
+    removeWarning,
+    setChannelActivation,
+    getChannelActivation,
+    isChannelActive
 };
