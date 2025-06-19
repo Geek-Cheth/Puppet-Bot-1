@@ -8,7 +8,7 @@ async function fetchAnimeImage(args, userId) {
     let count = 1;
     const additionalTags = [];
     const blacklistedTags = [];
-
+    
     // Basic argument parsing - can be improved
     if (args.length > 0) {
         category = args[0]; // First argument as category
